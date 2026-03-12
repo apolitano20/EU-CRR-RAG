@@ -1,6 +1,7 @@
-# Project memory (local only)
+# Project memory / local planning (not source artefacts)
 lesson_learnt.md
 WORKLOG.md
+spec.md
 crr_raw.html
 
 # Runtime artifacts

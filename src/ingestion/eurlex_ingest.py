@@ -22,17 +22,12 @@ DEFAULT_CRR_URL = (
     "?uri=CELEX:02013R0575-20260101"
 )
 
-# EUR-Lex CSS class → legal level
-_CLASS_TO_LEVEL = {
-    "sti-doc": "PART",
-    "ti-section-1": "PART",
-    "ti-section-2": "TITLE",
-    "ti-section-3": "CHAPTER",
-    "ti-section-4": "SECTION",
-    "sti-art": "ARTICLE",
-    "ti-art": "ARTICLE",
-}
-_PARAGRAPH_CLASS = "normal"
+# EUR-Lex CSS class → legal level (current consolidated format as of 2026)
+# title-division-1 carries the numbered heading (PART ONE, TITLE I, CHAPTER 1, SECTION 1…)
+# title-article-norm carries the article number (Article 92)
+_DIVISION_CLASS = "title-division-1"
+_ARTICLE_CLASS = "title-article-norm"
+_PARAGRAPH_CLASS = "norm"  # body paragraphs (11 000+ per document)
 
 
 class EurLexIngester:
@@ -108,7 +103,9 @@ class EurLexIngester:
     def _parse_with_beautifulsoup(self, html: str) -> list[Document]:
         logger.info("Parsing with BeautifulSoup.")
         try:
-            from bs4 import BeautifulSoup, FeatureNotFound
+            from bs4 import BeautifulSoup, FeatureNotFound, XMLParsedAsHTMLWarning
+            import warnings
+            warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
             try:
                 soup = BeautifulSoup(html, "lxml")
             except FeatureNotFound:
@@ -127,31 +124,26 @@ class EurLexIngester:
         paragraphs: list[str] = []
 
         for element in soup.find_all(True):
-            classes = element.get("class") or []
-            # Resolve the first matching EUR-Lex class
-            level = None
-            matched_class = None
-            for cls in classes:
-                if cls in _CLASS_TO_LEVEL:
-                    level = _CLASS_TO_LEVEL[cls]
-                    matched_class = cls
-                    break
+            classes = set(element.get("class") or [])
 
-            if level is not None:
-                # Flush accumulated paragraphs before updating hierarchy
+            if _DIVISION_CLASS in classes:
+                # Flush before hierarchy change
                 if paragraphs:
                     documents.append(self._make_document(paragraphs, meta))
                     paragraphs = []
-
                 text = element.get_text(" ", strip=True)
-                if level == "ARTICLE":
-                    article_meta = self._classify_article_heading(text)
-                    meta.update(article_meta)
-                else:
-                    heading_meta = self._classify_heading(text, level)
-                    # When a higher-level heading appears, clear lower-level fields
-                    meta = self._reset_lower(meta, level)
-                    meta.update(heading_meta)
+                heading_meta = self._classify_heading(text)
+                level = heading_meta.get("level", "")
+                meta = self._reset_lower(meta, level)
+                meta.update(heading_meta)
+
+            elif _ARTICLE_CLASS in classes:
+                # Flush before new article
+                if paragraphs:
+                    documents.append(self._make_document(paragraphs, meta))
+                    paragraphs = []
+                text = element.get_text(" ", strip=True)
+                meta.update(self._classify_article_heading(text))
 
             elif _PARAGRAPH_CLASS in classes:
                 text = element.get_text(" ", strip=True)
@@ -180,16 +172,26 @@ class EurLexIngester:
         return Document(text="\n\n".join(paragraphs), metadata=dict(meta))
 
     @staticmethod
-    def _classify_heading(text: str, level: str) -> dict[str, str]:
-        meta: dict[str, str] = {"level": level}
-        if m := re.match(r"PART\s+([\w]+)", text, re.I):
+    def _classify_heading(text: str) -> dict[str, str]:
+        """Derive legal level and identifier from a title-division-1 heading text."""
+        meta: dict[str, str] = {}
+        if m := re.match(r"PART\s+([\w\-]+)", text, re.I):
+            meta["level"] = "PART"
             meta["part"] = m.group(1)
-        elif m := re.match(r"TITLE\s+([\w]+)", text, re.I):
+        elif m := re.match(r"TITLE\s+([\w\-]+)", text, re.I):
+            meta["level"] = "TITLE"
             meta["title"] = m.group(1)
-        elif m := re.match(r"CHAPTER\s+([\w]+)", text, re.I):
+        elif m := re.match(r"CHAPTER\s+([\w\-]+)", text, re.I):
+            meta["level"] = "CHAPTER"
             meta["chapter"] = m.group(1)
-        elif m := re.match(r"SECTION\s+([\w]+)", text, re.I):
+        elif m := re.match(r"SUB-?SECTION\s+([\w\-]+)", text, re.I):
+            meta["level"] = "SECTION"
             meta["section"] = m.group(1)
+        elif m := re.match(r"SECTION\s+([\w\-]+)", text, re.I):
+            meta["level"] = "SECTION"
+            meta["section"] = m.group(1)
+        else:
+            meta["level"] = "DIVISION"
         return meta
 
     @staticmethod

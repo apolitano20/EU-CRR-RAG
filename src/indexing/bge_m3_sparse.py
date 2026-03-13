@@ -17,8 +17,10 @@ def _get_model():
     if _model is None:
         with _model_lock:
             if _model is None:
+                import torch
                 from FlagEmbedding import BGEM3FlagModel
-                _model = BGEM3FlagModel("BAAI/bge-m3", use_fp16=True)
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                _model = BGEM3FlagModel("BAAI/bge-m3", use_fp16=True, device=device)
     return _model
 
 

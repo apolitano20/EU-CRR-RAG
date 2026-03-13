@@ -19,6 +19,7 @@ from llama_index.core.postprocessor import SimilarityPostprocessor
 from llama_index.core.prompts import PromptTemplate
 from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core.response_synthesizers import get_response_synthesizer
+from llama_index.core.schema import QueryBundle
 from llama_index.core.vector_stores.types import (
     FilterOperator,
     MetadataFilter,
@@ -66,13 +67,54 @@ _LEGAL_QA_TEMPLATE = PromptTemplate(
 )
 
 
+# CRR-specific abbreviation expansion: inserted before embedding so the model sees full terms.
+# Matched case-sensitively so generic words (e.g. "at1" in prose) are not expanded.
+_ABBREV_MAP: dict[str, str] = {
+    "CET1": "Common Equity Tier 1",
+    "AT1": "Additional Tier 1",
+    "T2": "Tier 2 capital",
+    "LCR": "Liquidity Coverage Ratio",
+    "NSFR": "Net Stable Funding Ratio",
+    "MREL": "Minimum Requirement for own funds and Eligible Liabilities",
+    "RWA": "risk-weighted assets",
+    "IRB": "Internal Ratings-Based approach",
+    "CVA": "Credit Valuation Adjustment",
+    "CCR": "Counterparty Credit Risk",
+    "EAD": "Exposure at Default",
+    "LGD": "Loss Given Default",
+    "ECAI": "External Credit Assessment Institution",
+    "SFT": "Securities Financing Transaction",
+    "CCP": "Central Counterparty",
+    "QCCP": "Qualifying Central Counterparty",
+    "EBA": "European Banking Authority",
+}
+_ABBREV_RE = re.compile(r"\b(" + "|".join(re.escape(k) for k in _ABBREV_MAP) + r")\b")
+
 # Normalise shorthand article references to the canonical "Article N" form used in metadata.
 # Handles: "art. 92", "Art 92", "article92", "§92" → "Article 92"
 _ART_RE = re.compile(r"\b(?:art(?:icle|\.)?)\s*(\d[\w]*)", re.IGNORECASE)
 
+# Detect simple single-article lookup queries for task-type routing.
+# Matches: "Article 92", "What does Article 92 say?", "Explain Article 92"
+# Does NOT match: "Article 92 requirements", "Article 92 and Article 93"
+_DIRECT_LOOKUP_RE = re.compile(
+    r"^(?:(?:what(?:\s+does)?|explain|describe|summarise|summarize|define|tell\s+me\s+about)\s+)?"
+    r"Article\s+(\d[\w]*)"
+    r"(?:\s*(?:say|mean|require|state|cover|provide|set\s+out))?\s*\??$",
+    re.IGNORECASE,
+)
+
 
 def _normalise_query(query: str) -> str:
+    """Expand CRR abbreviations and canonicalise article shorthand references."""
+    query = _ABBREV_RE.sub(lambda m: f"{m.group(1)} ({_ABBREV_MAP[m.group(1)]})", query)
     return _ART_RE.sub(lambda m: f"Article {m.group(1)}", query)
+
+
+def _detect_direct_article_lookup(query: str) -> Optional[str]:
+    """Return article number if the query is a direct single-article lookup, else None."""
+    m = _DIRECT_LOOKUP_RE.match(query)
+    return m.group(1) if m else None
 
 
 @dataclass
@@ -149,6 +191,11 @@ class QueryEngine:
         user_query = _normalise_query(user_query)
         logger.info("[%s] Query: %s (language=%s)", trace_id, user_query, language)
 
+        # Task-type routing: detect direct single-article lookups
+        direct_art = _detect_direct_article_lookup(user_query)
+        if direct_art:
+            logger.info("[%s] Direct article lookup: Article %s", trace_id, direct_art)
+
         # Use a cached language-filtered engine — double-checked locking for thread safety
         if language:
             if language not in self._engine_cache:
@@ -165,19 +212,32 @@ class QueryEngine:
         token_counter = TokenCountingHandler(verbose=False)
         Settings.callback_manager = CallbackManager([token_counter])
 
-        response = engine.query(user_query)
-        source_nodes = response.source_nodes or []
+        query_bundle = QueryBundle(query_str=user_query)
+
+        # Stage 1: Retrieval (includes postprocessors: similarity cutoff + reranker if enabled)
+        t_ret = time.perf_counter()
+        if direct_art:
+            source_nodes = self._direct_article_retrieve(direct_art, user_query, language)
+        else:
+            source_nodes = engine.retrieve(query_bundle)
+        t_retrieval_ms = round((time.perf_counter() - t_ret) * 1000)
 
         # Cross-lingual fallback: if language filter produced no results, retry without filter
         if language and not source_nodes:
             logger.info("[%s] No results for language=%s — retrying without language filter", trace_id, language)
-            response = self._engine.query(user_query)
-            source_nodes = response.source_nodes or []
+            source_nodes = self._engine.retrieve(query_bundle)
 
-        # Cross-reference expansion
+        # Stage 2: Cross-reference expansion
         expansions = max_cross_ref_expansions if max_cross_ref_expansions is not None \
             else self.max_cross_ref_expansions
+        t_exp = time.perf_counter()
         expanded_nodes = self._expand_cross_references(source_nodes, language=language, limit=expansions)
+        t_expand_ms = round((time.perf_counter() - t_exp) * 1000)
+
+        # Stage 3: LLM synthesis
+        t_syn = time.perf_counter()
+        response = engine.synthesize(query_bundle, source_nodes)
+        t_synthesis_ms = round((time.perf_counter() - t_syn) * 1000)
 
         sources = [
             {
@@ -204,12 +264,17 @@ class QueryEngine:
 
         logger.info(
             "[%s] Retrieved %d source nodes + %d expanded; "
-            "answer=%d chars; latency=%dms; tokens=prompt:%d,completion:%d",
+            "answer=%d chars; latency=%dms "
+            "(retrieval=%dms, expansion=%dms, synthesis=%dms); "
+            "tokens=prompt:%d,completion:%d",
             trace_id,
             len(source_nodes),
             len(expanded_nodes),
             len(str(response)),
             latency_ms,
+            t_retrieval_ms,
+            t_expand_ms,
+            t_synthesis_ms,
             prompt_tokens,
             completion_tokens,
         )
@@ -225,17 +290,21 @@ class QueryEngine:
         source_nodes,
         language: Optional[str],
         limit: int,
+        depth: int = 1,
+        _seen: Optional[set] = None,
     ) -> list:
-        """Fetch articles referenced by retrieved nodes that aren't already in the result set."""
-        if limit <= 0:
+        """Fetch articles referenced by retrieved nodes that aren't already in the result set.
+
+        Args:
+            depth: How many hops to follow (1 = single-pass, 2 = also expand refs of refs).
+            _seen: Internal set of already-retrieved article numbers (used for recursion).
+        """
+        if limit <= 0 or depth <= 0:
             return []
 
-        # Collect already-retrieved article numbers
-        retrieved_articles: set[str] = set()
-        for node in source_nodes:
-            art = node.node.metadata.get("article", "")
-            if art:
-                retrieved_articles.add(art)
+        if _seen is None:
+            _seen = {node.node.metadata.get("article", "") for node in source_nodes
+                     if node.node.metadata.get("article")}
 
         # Collect referenced articles from all source node metadata
         refs_to_fetch: set[str] = set()
@@ -244,39 +313,65 @@ class QueryEngine:
             if csv:
                 for ref in csv.split(","):
                     ref = ref.strip()
-                    if ref and ref not in retrieved_articles:
+                    if ref and ref not in _seen:
                         refs_to_fetch.add(ref)
 
         if not refs_to_fetch:
             return []
 
         expanded: list = []
-        retriever = self._vector_index.as_retriever(
-            similarity_top_k=1,
-            vector_store_query_mode=VectorStoreQueryMode.HYBRID,
-        )
-
         for ref_art in list(refs_to_fetch)[:limit]:
             try:
-                filters = MetadataFilters(filters=[
+                filters_list = [
                     MetadataFilter(key="article", value=ref_art, operator=FilterOperator.EQ),
-                ])
+                ]
                 if language:
-                    filters.filters.append(
+                    filters_list.append(
                         MetadataFilter(key="language", value=language, operator=FilterOperator.EQ)
                     )
-                lang_retriever = self._vector_index.as_retriever(
+                retriever = self._vector_index.as_retriever(
                     similarity_top_k=1,
                     vector_store_query_mode=VectorStoreQueryMode.HYBRID,
-                    filters=filters,
+                    filters=MetadataFilters(filters=filters_list),
                 )
-                results = lang_retriever.retrieve(f"Article {ref_art}")
+                results = retriever.retrieve(f"Article {ref_art}")
                 expanded.extend(results)
+                _seen.add(ref_art)
             except Exception as exc:
                 logger.warning("Cross-ref expansion failed for Article %s: %s", ref_art, exc)
 
-        logger.info("Cross-reference expansion: fetched %d additional nodes.", len(expanded))
+        logger.info(
+            "Cross-reference expansion (depth=%d): fetched %d additional nodes.",
+            depth, len(expanded),
+        )
+
+        # Recursive second-hop expansion
+        if depth > 1 and expanded:
+            remaining = max(0, limit - len(expanded))
+            second_hop = self._expand_cross_references(
+                expanded, language=language, limit=remaining, depth=depth - 1, _seen=_seen
+            )
+            expanded.extend(second_hop)
+
         return expanded
+
+    def _direct_article_retrieve(
+        self, article_num: str, query_str: str, language: Optional[str]
+    ) -> list:
+        """Metadata-filtered retrieval for a specific article number, bypassing vector ranking."""
+        filters_list = [
+            MetadataFilter(key="article", value=article_num, operator=FilterOperator.EQ),
+        ]
+        if language:
+            filters_list.append(
+                MetadataFilter(key="language", value=language, operator=FilterOperator.EQ)
+            )
+        retriever = self._vector_index.as_retriever(
+            similarity_top_k=2,
+            vector_store_query_mode=VectorStoreQueryMode.HYBRID,
+            filters=MetadataFilters(filters=filters_list),
+        )
+        return retriever.retrieve(query_str)
 
     # ------------------------------------------------------------------
     # Internal

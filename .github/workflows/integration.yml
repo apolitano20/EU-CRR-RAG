@@ -1,0 +1,45 @@
+name: Integration Tests
+
+on:
+  workflow_dispatch:  # manual trigger only
+
+jobs:
+  integration-tests:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    environment: integration
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: test_vector_store
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          QDRANT_URL: ${{ secrets.QDRANT_URL }}
+          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+        run: pytest tests/integration/test_vector_store.py -v --tb=short
+
+      - name: test_ingest_pipeline
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          QDRANT_URL: ${{ secrets.QDRANT_URL }}
+          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+        run: pytest tests/integration/test_ingest_pipeline.py -v --tb=short
+
+      - name: test_query_engine
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          QDRANT_URL: ${{ secrets.QDRANT_URL }}
+          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+        run: pytest tests/integration/test_query_engine.py -v --tb=short

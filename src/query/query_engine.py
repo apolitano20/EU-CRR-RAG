@@ -81,14 +81,18 @@ class QueryEngine:
         openai_api_key: Optional[str] = None,
         llm_model: str = LLM_MODEL,
         max_cross_ref_expansions: int = 3,
-        use_reranker: bool = True,
+        use_reranker: Optional[bool] = None,
     ) -> None:
         self.vector_store = vector_store
         self.indexer = indexer
         self.openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
         self.llm_model = llm_model
         self.max_cross_ref_expansions = max_cross_ref_expansions
-        self.use_reranker = use_reranker
+        # If not explicitly set, read from env (USE_RERANKER=true); default False
+        if use_reranker is None:
+            self.use_reranker = os.getenv("USE_RERANKER", "false").lower() == "true"
+        else:
+            self.use_reranker = use_reranker
         self._engine: Optional[RetrieverQueryEngine] = None
         self._vector_index: Optional[VectorStoreIndex] = None
         self._engine_cache: dict[str, RetrieverQueryEngine] = {}

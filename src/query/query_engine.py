@@ -25,9 +25,9 @@ from llama_index.core.vector_stores.types import (
     MetadataFilters,
     VectorStoreQueryMode,
 )
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.llms.openai import OpenAI
 
+from src.indexing.bge_m3_sparse import BGEm3Embedding
 from src.indexing.index_builder import HierarchicalIndexer
 from src.indexing.vector_store import VectorStore
 
@@ -37,7 +37,6 @@ RETRIEVAL_TOP_K = 12       # first-stage candidates passed to reranker
 RERANK_TOP_N = 6           # final results after reranking
 SIMILARITY_CUTOFF = 0.3
 RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
-EMBED_MODEL = "BAAI/bge-m3"
 LLM_MODEL = "gpt-4o"
 
 _LEGAL_QA_TEMPLATE = PromptTemplate(
@@ -269,7 +268,8 @@ class QueryEngine:
     # ------------------------------------------------------------------
 
     def _configure_settings(self) -> None:
-        Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
+        # Reuse the FlagEmbedding singleton — avoids loading a second 570 MB BGE-M3 copy
+        Settings.embed_model = BGEm3Embedding()
         Settings.llm = OpenAI(model=self.llm_model, api_key=self.openai_api_key)
 
     def _build_engine(

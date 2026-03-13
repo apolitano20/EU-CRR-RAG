@@ -3,6 +3,14 @@ Integration test configuration.
 
 Loads .env and skips the entire integration suite if required env vars
 are missing — so CI without credentials doesn't fail noisily.
+
+WARNING: Run integration test files individually, NOT all together:
+    pytest tests/integration/test_vector_store.py -v
+    pytest tests/integration/test_ingest_pipeline.py -v
+    pytest tests/integration/test_query_engine.py -v
+
+Running all three in one invocation segfaults on Windows due to BGE-M3
+(570 MB model) memory accumulation across test files.
 """
 from __future__ import annotations
 

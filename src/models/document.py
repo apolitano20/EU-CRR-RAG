@@ -11,8 +11,7 @@ class NodeLevel(str, Enum):
     CHAPTER = "CHAPTER"
     SECTION = "SECTION"
     ARTICLE = "ARTICLE"
-    PARAGRAPH = "PARAGRAPH"
-    POINT = "POINT"
+    ANNEX = "ANNEX"
 
 
 @dataclass
@@ -25,6 +24,13 @@ class DocumentNode:
     chapter: Optional[str] = None
     section: Optional[str] = None
     article: Optional[str] = None
+    article_title: Optional[str] = None        # e.g. "Own funds requirements"
+    annex_id: Optional[str] = None             # e.g. "I", "II" (annex nodes only)
+    annex_title: Optional[str] = None          # annex subtitle
+    referenced_articles: str = ""              # comma-separated "4,13,92"
+    referenced_external: str = ""              # e.g. "Directive 2013/36/EU"
+    has_table: bool = False
+    has_formula: bool = False
     metadata: dict = field(default_factory=dict)
 
     def to_metadata(self) -> dict:
@@ -37,12 +43,21 @@ class DocumentNode:
             "chapter": self.chapter or "",
             "section": self.section or "",
             "article": self.article or "",
+            "article_title": self.article_title or "",
+            "annex_id": self.annex_id or "",
+            "annex_title": self.annex_title or "",
+            "referenced_articles": self.referenced_articles,
+            "referenced_external": self.referenced_external,
+            "has_table": self.has_table,
+            "has_formula": self.has_formula,
             **self.metadata,
         }
 
     @property
     def citation(self) -> str:
         """Human-readable citation string, e.g. 'Part III, Title II, Chapter 1, Article 92'."""
+        if self.annex_id:
+            return f"Annex {self.annex_id}"
         parts = []
         if self.part:
             parts.append(f"Part {self.part}")

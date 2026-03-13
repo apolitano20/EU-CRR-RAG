@@ -8,19 +8,27 @@ Endpoints:
 from __future__ import annotations
 
 import logging
+import time
 import threading
 from contextlib import asynccontextmanager
+from typing import Optional
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
+from src.utils.logging_config import setup_logging
+
+setup_logging(json_output=True)
 
 from src.indexing.index_builder import HierarchicalIndexer
 from src.indexing.vector_store import VectorStore
-from src.ingestion.eurlex_ingest import DEFAULT_CRR_URL, EurLexIngester
+from src.ingestion.eurlex_ingest import EurLexIngester
+from src.ingestion.language_config import get_config
 from src.query.query_engine import QueryEngine, QueryResult
 
 logger = logging.getLogger(__name__)
@@ -52,9 +60,25 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="EU CRR RAG API",
     description="Regulatory compliance Q&A over EU Capital Requirements Regulation (CRR).",
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Log every request with method, path, status code, and latency."""
+    t0 = time.perf_counter()
+    response = await call_next(request)
+    latency_ms = round((time.perf_counter() - t0) * 1000)
+    logger.info(
+        "HTTP %s %s -> %d (%dms)",
+        request.method,
+        request.url.path,
+        response.status_code,
+        latency_ms,
+    )
+    return response
 
 # ------------------------------------------------------------------
 # Request / Response models
@@ -63,6 +87,8 @@ app = FastAPI(
 
 class QueryRequest(BaseModel):
     query: str
+    preferred_language: Optional[str] = None
+    max_cross_ref_expansions: Optional[int] = None
 
 
 class QueryResponse(BaseModel):
@@ -72,13 +98,37 @@ class QueryResponse(BaseModel):
 
 
 class IngestRequest(BaseModel):
-    url: str = DEFAULT_CRR_URL
+    url: Optional[str] = None
+    language: str = "en"
     reset: bool = False
 
 
 class IngestResponse(BaseModel):
     status: str
     message: str
+
+
+# ------------------------------------------------------------------
+# Language detection heuristic
+# ------------------------------------------------------------------
+
+
+def _detect_language(text: str) -> Optional[str]:
+    """Guess query language from character set. Returns None for no filter (cross-language).
+
+    Limitations (acceptable for EN/IT/PL MVP):
+    - Polish is detected reliably via its unique diacritics (ą ć ę ł ń ś ź ż).
+    - Italian detection uses àèéìíîòóùú, which are also present in French, Romanian,
+      and Portuguese. Queries in those languages will be incorrectly routed to the
+      Italian index. If additional Romance languages are added, replace this heuristic
+      with a proper language-detection library (e.g. langdetect or lingua-py).
+    - Plain English (no diacritics) always returns None → cross-language retrieval.
+    """
+    if set(text) & set("ąćęłńóśźżĄĆĘŁŃÓŚŹŻ"):
+        return "pl"
+    if set(text) & set("àèéìíîòóùúÀÈÉÌÍÎÒÓÙÚ"):
+        return "it"
+    return None  # no filter → cross-language retrieval
 
 
 # ------------------------------------------------------------------
@@ -93,7 +143,13 @@ def query(request: QueryRequest) -> QueryResponse:
             status_code=503,
             detail="Index not loaded. Run ingestion first.",
         )
-    result: QueryResult = _query_engine.query(request.query)
+
+    lang = request.preferred_language or _detect_language(request.query)
+    result: QueryResult = _query_engine.query(
+        request.query,
+        language=lang,
+        max_cross_ref_expansions=request.max_cross_ref_expansions,
+    )
     return QueryResponse(
         answer=result.answer,
         sources=result.sources,
@@ -108,9 +164,12 @@ def ingest(request: IngestRequest, background_tasks: BackgroundTasks) -> IngestR
 
     def _run() -> None:
         try:
-            ingester = EurLexIngester(url=request.url)
+            url = request.url or get_config(request.language).build_url()
+            ingester = EurLexIngester(url=url, language=request.language)
             docs = ingester.load()
-            indexer = HierarchicalIndexer(vector_store=_vector_store, reset_store=request.reset)
+            indexer = HierarchicalIndexer(
+                vector_store=_vector_store, reset_store=request.reset
+            )
             indexer.build(docs)
             _query_engine.load()
         finally:

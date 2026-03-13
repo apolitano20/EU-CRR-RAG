@@ -4,10 +4,18 @@ WORKLOG.md
 spec.md
 crr_raw.html
 
+# Raw HTML data files (large, not source — download via EUR-Lex or ingest pipeline)
+crr_raw_*.html
+
+# Local planning / review docs
+cross-reference-audit.md
+crr_legal_rag_ui_spec.md
+multilang_approach.md
+rag_review_qa_for_claude_code.md
+
 # Runtime artifacts
-chroma_db/
 docstore/
-bm25_index.pkl
+chroma_db/
 
 # Environment
 .env

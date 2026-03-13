@@ -1,21 +1,22 @@
 # EU CRR RAG
 
-A Retrieval-Augmented Generation system for the EU Capital Requirements Regulation (CRR — Regulation (EU) No 575/2013). Ask compliance questions in plain English; get answers with article-level citations.
+A Retrieval-Augmented Generation system for the EU Capital Requirements Regulation (CRR — Regulation (EU) No 575/2013). Ask compliance questions in English, Italian, or Polish; get answers with article-level citations.
 
 ## What it does
 
-1. Downloads the consolidated CRR HTML from EUR-Lex
+1. Downloads (or reads from a local file) the consolidated CRR HTML from EUR-Lex
 2. Parses and indexes it preserving the full legal hierarchy: PART → TITLE → CHAPTER → SECTION → ARTICLE → Paragraph
-3. Answers regulatory questions via a FastAPI HTTP API, citing the relevant articles
+3. Supports multilingual ingestion (EN / IT / PL) in a single shared index with per-node language metadata
+4. Answers regulatory questions via a FastAPI HTTP API, citing the relevant articles
 
 ## Tech stack
 
 | Layer | Technology |
 |---|---|
 | Parsing | BeautifulSoup4 (primary), LlamaParse (opt-in) |
-| Embeddings | `bge-small-en-v1.5` (HuggingFace, local) |
-| Vector store | Chroma (MVP) |
-| Retrieval | AutoMergingRetriever + BM25, fused via Reciprocal Rank Fusion |
+| Embeddings | `BAAI/bge-m3` (HuggingFace, local — multilingual, dense + sparse) |
+| Vector store | Qdrant Cloud (native hybrid dense + sparse search) |
+| Retrieval | AutoMergingRetriever + Qdrant native hybrid (dense + sparse) |
 | Synthesis | OpenAI GPT-4o |
 | API | FastAPI |
 
@@ -24,21 +25,40 @@ A Retrieval-Augmented Generation system for the EU Capital Requirements Regulati
 ```bash
 pip install -r requirements.txt
 cp .env.example .env
-# Fill in OPENAI_API_KEY in .env
+# Fill in OPENAI_API_KEY, QDRANT_URL, and QDRANT_API_KEY in .env
 # Optionally add LLAMA_CLOUD_API_KEY to enable LlamaParse
 ```
+
+> **Note:** BGE-M3 is ~570 MB and will be downloaded automatically on first use.
 
 ## Ingestion
 
 ```bash
-# First run: --reset drops any existing index
-python -m src.pipelines.ingest_pipeline --reset
+# First run: --reset creates a fresh Qdrant collection
+python -m src.pipelines.ingest_pipeline --reset --language en --file crr_raw_en.html
 
-# Custom EUR-Lex URL (e.g. a different consolidation date)
-python -m src.pipelines.ingest_pipeline --url <url>
+# Add Italian (no --reset: appends to existing collection)
+python -m src.pipelines.ingest_pipeline --language it --file crr_raw_ita.html
+
+# Add Polish
+python -m src.pipelines.ingest_pipeline --language pl --file crr_raw_pl.html
+
+# Download directly from EUR-Lex instead of using a local file
+python -m src.pipelines.ingest_pipeline --reset --language en
 ```
 
-Ingestion produces ~740 article-level documents from the 2026-01-01 consolidation. Output is persisted to `chroma_db/`, `docstore/`, and `bm25_index.pkl`.
+> **Warning:** `--reset` drops the **entire** Qdrant collection (all languages). Only use it when starting completely fresh.
+
+Ingestion produces ~742 article-level documents per language. Node hierarchy and docstore are persisted to `docstore/`.
+
+### CLI reference
+
+| Flag | Default | Description |
+|---|---|---|
+| `--language` | `en` | Language to ingest: `en`, `it`, or `pl` |
+| `--file` | — | Path to a local HTML file (skips network download) |
+| `--url` | auto-derived | EUR-Lex URL (derived from `--language` if not set) |
+| `--reset` | off | Drop and recreate the Qdrant collection before ingesting |
 
 ## Running the API
 
@@ -54,9 +74,20 @@ uvicorn api.main:app --reload
 | `POST` | `/api/query` | Ask a question |
 | `POST` | `/api/ingest` | Trigger ingestion programmatically |
 
-### Example query
+### Example queries
 
 ```bash
+# English query (auto-detected, or explicit)
+curl -X POST http://localhost:8000/api/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What are the minimum CET1 requirements?", "preferred_language": "en"}'
+
+# Italian query (language auto-detected from accent characters)
+curl -X POST http://localhost:8000/api/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Quali sono i requisiti minimi CET1?"}'
+
+# Cross-language retrieval (no language filter)
 curl -X POST http://localhost:8000/api/query \
   -H "Content-Type: application/json" \
   -d '{"query": "What are the risk weights for exposures to institutions under Article 114?"}'
@@ -66,46 +97,58 @@ Response shape:
 ```json
 {
   "answer": "...",
-  "sources": [...],
+  "sources": [
+    {
+      "text": "...",
+      "score": 0.87,
+      "metadata": {"article": "92", "part": "TWO", "language": "en", ...}
+    }
+  ],
   "trace_id": "..."
 }
 ```
 
+If `preferred_language` is omitted, the API detects Polish (from `ąćęłńóśźż…`) and Italian (from `àèéìíîòóùú…`) automatically. Undetected queries retrieve across all languages.
+
 ## Architecture
 
 ```
-EurLexIngester          downloads + parses EUR-Lex HTML → LlamaIndex Documents
-      ↓
-HierarchicalIndexer     HierarchicalNodeParser → Chroma vector index + BM25 index
-      ↓
-QueryEngine             AutoMergingRetriever (vector) + BM25Retriever
-                        → QueryFusionRetriever (RRF) → GPT-4o synthesis
+EurLexIngester          downloads/reads EUR-Lex HTML → LlamaIndex Documents
+      ↓                 (language-aware heading classification; stamps language on every node)
+HierarchicalIndexer     HierarchicalNodeParser → Qdrant hybrid vector index (dense + sparse)
+      ↓                 docstore persisted for AutoMergingRetriever
+QueryEngine             AutoMergingRetriever (vector) + Qdrant native hybrid (BGE-M3 dense+sparse)
+                        → optional MetadataFilter(language) → GPT-4o synthesis
       ↓
 FastAPI                 POST /api/query → {answer, sources, trace_id}
 ```
 
-**AutoMergingRetriever:** when a child node (paragraph/point) is retrieved, it automatically merges up to the parent Article/Section to provide full context.
+**AutoMergingRetriever:** when a child node (paragraph) is retrieved, it automatically merges up to the parent Article/Section to provide full context.
 
-**Hybrid retrieval:** BM25 keyword precision + vector semantic recall, combined with Reciprocal Rank Fusion.
+**Hybrid retrieval:** BGE-M3 dense semantic recall + BGE-M3 sparse (lexical) precision, fused natively by Qdrant — no separate BM25 index needed.
+
+**Multilingual:** a single Qdrant collection holds all languages. Each node carries a `language` metadata field; queries can filter by language or retrieve cross-language.
 
 ## Directory structure
 
 ```
 eu-crr-rag/
 ├── api/
-│   └── main.py                  # FastAPI app
+│   └── main.py                    # FastAPI app
 ├── src/
 │   ├── ingestion/
-│   │   └── eurlex_ingest.py     # EUR-Lex downloader + BeautifulSoup parser
+│   │   ├── eurlex_ingest.py       # EUR-Lex downloader + BeautifulSoup parser
+│   │   └── language_config.py     # Heading keywords + URL templates for EN/IT/PL
 │   ├── indexing/
-│   │   ├── index_builder.py     # HierarchicalIndexer
-│   │   └── vector_store.py      # Chroma wrapper
+│   │   ├── bge_m3_sparse.py       # BGE-M3 sparse encoding for Qdrant hybrid search
+│   │   ├── index_builder.py       # HierarchicalIndexer
+│   │   └── vector_store.py        # Qdrant Cloud wrapper
 │   ├── models/
-│   │   └── document.py          # DocumentNode dataclass + NodeLevel enum
+│   │   └── document.py            # DocumentNode dataclass + NodeLevel enum
 │   ├── pipelines/
-│   │   └── ingest_pipeline.py   # CLI entrypoint
+│   │   └── ingest_pipeline.py     # CLI entrypoint
 │   └── query/
-│       └── query_engine.py      # Hybrid retriever + GPT-4o synthesis
+│       └── query_engine.py        # Hybrid retriever + GPT-4o synthesis
 ├── .env.example
 └── requirements.txt
 ```
@@ -115,4 +158,6 @@ eu-crr-rag/
 | Variable | Required | Description |
 |---|---|---|
 | `OPENAI_API_KEY` | Yes | Used for GPT-4o synthesis |
+| `QDRANT_URL` | Yes | Qdrant Cloud cluster URL (e.g. `https://xyz.qdrant.io`) |
+| `QDRANT_API_KEY` | Yes | Qdrant Cloud API key |
 | `LLAMA_CLOUD_API_KEY` | No | Enables LlamaParse for richer HTML parsing |

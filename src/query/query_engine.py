@@ -1,32 +1,65 @@
 """
-QueryEngine: hybrid retrieval (AutoMergingRetriever + BM25 via QueryFusionRetriever)
-followed by GPT-4o synthesis.
+QueryEngine: Qdrant native hybrid retrieval (dense + sparse via BGE-M3)
+with cross-reference expansion and GPT-4o synthesis.
 """
 from __future__ import annotations
 
 import logging
 import os
+import re
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Optional
 
 from llama_index.core import Settings, VectorStoreIndex
+from llama_index.core.callbacks import CallbackManager, TokenCountingHandler
 from llama_index.core.postprocessor import SimilarityPostprocessor
+from llama_index.core.prompts import PromptTemplate
 from llama_index.core.query_engine import RetrieverQueryEngine
-from llama_index.core.retrievers import AutoMergingRetriever, QueryFusionRetriever
+from llama_index.core.response_synthesizers import get_response_synthesizer
+from llama_index.core.vector_stores.types import (
+    FilterOperator,
+    MetadataFilter,
+    MetadataFilters,
+    VectorStoreQueryMode,
+)
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.llms.openai import OpenAI
-from llama_index.retrievers.bm25 import BM25Retriever
 
 from src.indexing.index_builder import HierarchicalIndexer
 from src.indexing.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 
-SIMILARITY_TOP_K = 12
-FUSION_TOP_K = 5
-EMBED_MODEL = "BAAI/bge-small-en-v1.5"
+SIMILARITY_TOP_K = 6
+SIMILARITY_CUTOFF = 0.3
+EMBED_MODEL = "BAAI/bge-m3"
 LLM_MODEL = "gpt-4o"
+
+_LEGAL_QA_TEMPLATE = PromptTemplate(
+    "You are a regulatory compliance expert specialising in EU prudential banking regulation "
+    "(CRR – Regulation (EU) No 575/2013).\n\n"
+    "Use ONLY the context below to answer the question. "
+    "Always cite the specific Article number(s) you are drawing from (e.g. 'Under Article 92, …'). "
+    "If the context does not contain enough information to answer, say exactly: "
+    "'The provided context does not contain sufficient information to answer this question.' "
+    "Do not speculate or introduce information not present in the context.\n\n"
+    "---------------------\n"
+    "{context_str}\n"
+    "---------------------\n\n"
+    "Question: {query_str}\n"
+    "Answer: "
+)
+
+
+# Normalise shorthand article references to the canonical "Article N" form used in metadata.
+# Handles: "art. 92", "Art 92", "article92", "§92" → "Article 92"
+_ART_RE = re.compile(r"\b(?:art(?:icle|\.)?)\s*(\d[\w]*)", re.IGNORECASE)
+
+
+def _normalise_query(query: str) -> str:
+    return _ART_RE.sub(lambda m: f"Article {m.group(1)}", query)
 
 
 @dataclass
@@ -37,7 +70,7 @@ class QueryResult:
 
 
 class QueryEngine:
-    """Wraps hybrid retrieval + GPT-4o synthesis into a single query interface."""
+    """Wraps hybrid retrieval + cross-reference expansion + GPT-4o synthesis."""
 
     def __init__(
         self,
@@ -45,86 +78,216 @@ class QueryEngine:
         indexer: HierarchicalIndexer,
         openai_api_key: Optional[str] = None,
         llm_model: str = LLM_MODEL,
+        max_cross_ref_expansions: int = 3,
     ) -> None:
         self.vector_store = vector_store
         self.indexer = indexer
         self.openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
         self.llm_model = llm_model
+        self.max_cross_ref_expansions = max_cross_ref_expansions
         self._engine: Optional[RetrieverQueryEngine] = None
+        self._vector_index: Optional[VectorStoreIndex] = None
+        self._engine_cache: dict[str, RetrieverQueryEngine] = {}
+        self._token_counter: Optional[TokenCountingHandler] = None
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     def load(self) -> None:
-        """Build the retriever chain from persisted indices."""
-        vector_index = self.indexer.load()   # may set Settings.llm = None as side effect
-        self._configure_settings()           # restore OpenAI LLM after indexer resets it
-        self._engine = self._build_engine(vector_index)
+        """Build the retriever chain from the persisted index."""
+        self._vector_index = self.indexer.load()  # may set Settings.llm = None as side effect
+        self._configure_settings()                 # restore OpenAI LLM after indexer resets it
+        self._engine = self._build_engine(self._vector_index)
+        self._engine_cache = {}
         logger.info("QueryEngine ready.")
 
     # ------------------------------------------------------------------
     # Query
     # ------------------------------------------------------------------
 
-    def query(self, user_query: str) -> QueryResult:
+    def query(
+        self,
+        user_query: str,
+        language: Optional[str] = None,
+        max_cross_ref_expansions: Optional[int] = None,
+    ) -> QueryResult:
         if self._engine is None:
             raise RuntimeError("Call load() before querying.")
 
         trace_id = str(uuid.uuid4())
-        logger.info("[%s] Query: %s", trace_id, user_query)
+        t0 = time.perf_counter()
+        user_query = _normalise_query(user_query)
+        logger.info("[%s] Query: %s (language=%s)", trace_id, user_query, language)
 
-        response = self._engine.query(user_query)
+        # Use a cached language-filtered engine to avoid rebuilding the retriever per query
+        if language:
+            if language not in self._engine_cache:
+                self._engine_cache[language] = self._build_engine(
+                    self._vector_index, language_filter=language
+                )
+            engine = self._engine_cache[language]
+        else:
+            engine = self._engine
+
+        response = engine.query(user_query)
+        source_nodes = response.source_nodes or []
+
+        # Cross-lingual fallback: if language filter produced no results, retry without filter
+        if language and not source_nodes:
+            logger.info("[%s] No results for language=%s — retrying without language filter", trace_id, language)
+            response = self._engine.query(user_query)
+            source_nodes = response.source_nodes or []
+
+        # Cross-reference expansion
+        expansions = max_cross_ref_expansions if max_cross_ref_expansions is not None \
+            else self.max_cross_ref_expansions
+        expanded_nodes = self._expand_cross_references(source_nodes, language=language, limit=expansions)
 
         sources = [
             {
                 "text": node.node.get_content()[:500],
                 "score": round(node.score or 0.0, 4),
                 "metadata": node.node.metadata,
+                "expanded": False,
             }
-            for node in (response.source_nodes or [])
+            for node in source_nodes
+        ]
+        sources += [
+            {
+                "text": node.node.get_content()[:500],
+                "score": 0.0,
+                "metadata": node.node.metadata,
+                "expanded": True,
+            }
+            for node in expanded_nodes
         ]
 
+        latency_ms = round((time.perf_counter() - t0) * 1000)
+        prompt_tokens = self._token_counter.prompt_llm_token_count if self._token_counter else 0
+        completion_tokens = self._token_counter.completion_llm_token_count if self._token_counter else 0
+
         logger.info(
-            "[%s] Retrieved %d source nodes; answer length=%d chars.",
-            trace_id, len(sources), len(str(response)),
+            "[%s] Retrieved %d source nodes + %d expanded; "
+            "answer=%d chars; latency=%dms; tokens=prompt:%d,completion:%d",
+            trace_id,
+            len(source_nodes),
+            len(expanded_nodes),
+            len(str(response)),
+            latency_ms,
+            prompt_tokens,
+            completion_tokens,
         )
 
         return QueryResult(answer=str(response), sources=sources, trace_id=trace_id)
+
+    # ------------------------------------------------------------------
+    # Cross-reference expansion
+    # ------------------------------------------------------------------
+
+    def _expand_cross_references(
+        self,
+        source_nodes,
+        language: Optional[str],
+        limit: int,
+    ) -> list:
+        """Fetch articles referenced by retrieved nodes that aren't already in the result set."""
+        if limit <= 0:
+            return []
+
+        # Collect already-retrieved article numbers
+        retrieved_articles: set[str] = set()
+        for node in source_nodes:
+            art = node.node.metadata.get("article", "")
+            if art:
+                retrieved_articles.add(art)
+
+        # Collect referenced articles from all source node metadata
+        refs_to_fetch: set[str] = set()
+        for node in source_nodes:
+            csv = node.node.metadata.get("referenced_articles", "")
+            if csv:
+                for ref in csv.split(","):
+                    ref = ref.strip()
+                    if ref and ref not in retrieved_articles:
+                        refs_to_fetch.add(ref)
+
+        if not refs_to_fetch:
+            return []
+
+        expanded: list = []
+        retriever = self._vector_index.as_retriever(
+            similarity_top_k=1,
+            vector_store_query_mode=VectorStoreQueryMode.HYBRID,
+        )
+
+        for ref_art in list(refs_to_fetch)[:limit]:
+            try:
+                filters = MetadataFilters(filters=[
+                    MetadataFilter(key="article", value=ref_art, operator=FilterOperator.EQ),
+                ])
+                if language:
+                    filters.filters.append(
+                        MetadataFilter(key="language", value=language, operator=FilterOperator.EQ)
+                    )
+                lang_retriever = self._vector_index.as_retriever(
+                    similarity_top_k=1,
+                    vector_store_query_mode=VectorStoreQueryMode.HYBRID,
+                    filters=filters,
+                )
+                results = lang_retriever.retrieve(f"Article {ref_art}")
+                expanded.extend(results)
+            except Exception as exc:
+                logger.warning("Cross-ref expansion failed for Article %s: %s", ref_art, exc)
+
+        logger.info("Cross-reference expansion: fetched %d additional nodes.", len(expanded))
+        return expanded
 
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
 
     def _configure_settings(self) -> None:
+        self._token_counter = TokenCountingHandler(verbose=False)
+        Settings.callback_manager = CallbackManager([self._token_counter])
         Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
         Settings.llm = OpenAI(model=self.llm_model, api_key=self.openai_api_key)
 
-    def _build_engine(self, vector_index: VectorStoreIndex) -> RetrieverQueryEngine:
-        storage_context = vector_index.storage_context
-
-        # Vector leg: AutoMergingRetriever climbs the node tree to return full parent context
-        vector_retriever = vector_index.as_retriever(similarity_top_k=SIMILARITY_TOP_K)
-        auto_merging_retriever = AutoMergingRetriever(
-            vector_retriever,
-            storage_context,
-            verbose=False,
+    def _build_engine(
+        self,
+        vector_index: VectorStoreIndex,
+        language_filter: Optional[str] = None,
+    ) -> RetrieverQueryEngine:
+        # Optional metadata filter for language-scoped retrieval
+        filters = (
+            MetadataFilters(
+                filters=[
+                    MetadataFilter(
+                        key="language",
+                        value=language_filter,
+                        operator=FilterOperator.EQ,
+                    )
+                ]
+            )
+            if language_filter
+            else None
         )
 
-        # BM25 leg: keyword-based retrieval on leaf nodes
-        bm25_retriever = self.indexer.load_bm25_retriever(similarity_top_k=SIMILARITY_TOP_K)
+        # Articles are self-contained units — no AutoMergingRetriever needed
+        vector_retriever = vector_index.as_retriever(
+            similarity_top_k=SIMILARITY_TOP_K,
+            vector_store_query_mode=VectorStoreQueryMode.HYBRID,
+            filters=filters,
+        )
 
-        # Fusion: Reciprocal Rank Fusion over both legs
-        fusion_retriever = QueryFusionRetriever(
-            retrievers=[auto_merging_retriever, bm25_retriever],
-            similarity_top_k=FUSION_TOP_K,
-            num_queries=1,  # no query augmentation; use the original query only
-            mode="reciprocal_rerank",
+        synthesizer = get_response_synthesizer(
+            text_qa_template=_LEGAL_QA_TEMPLATE,
             verbose=False,
         )
 
         return RetrieverQueryEngine.from_args(
-            retriever=fusion_retriever,
-            node_postprocessors=[SimilarityPostprocessor(similarity_cutoff=0.0)],
+            retriever=vector_retriever,
+            response_synthesizer=synthesizer,
+            node_postprocessors=[SimilarityPostprocessor(similarity_cutoff=SIMILARITY_CUTOFF)],
             verbose=False,
         )

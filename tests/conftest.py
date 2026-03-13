@@ -1,0 +1,280 @@
+"""
+Shared test fixtures for the EU CRR RAG test suite.
+
+Fixtures use the new EUR-Lex DOM structure:
+  - Articles: <div id="art_N"> inside a parent <div id="prt_X.tis_Y.cpt_Z...">
+  - Annexes: <div id="anx_I">
+"""
+from __future__ import annotations
+
+import textwrap
+from pathlib import Path
+
+import pytest
+
+# ---------------------------------------------------------------------------
+# HTML builder helpers
+# ---------------------------------------------------------------------------
+
+def _make_article_html(articles: list[dict]) -> str:
+    """
+    Build a minimal EUR-Lex HTML page containing the given articles.
+
+    Each article dict may have:
+      num          : article number (required)
+      parent_id    : parent div id encoding hierarchy (default: "prt_ONE.tis_I.cpt_1")
+      article_title: stitle-article-norm text (optional)
+      paragraphs   : list of paragraph texts (default: one generic paragraph)
+      points       : list of (label, text) tuples for grid-list points (optional)
+      has_table    : bool — if True, adds a <table class="borderOj"> (optional)
+      has_formula  : bool — if True, adds an <img src="data:image/png;base64,..."> (optional)
+    """
+    blocks = []
+    for art in articles:
+        num = art["num"]
+        parent_id = art.get("parent_id", "prt_ONE.tis_I.cpt_1")
+        article_title = art.get("article_title", "")
+        paragraphs = art.get("paragraphs", [f"This is the text of Article {num} with sufficient length."])
+        points = art.get("points", [])
+        has_table = art.get("has_table", False)
+        has_formula = art.get("has_formula", False)
+
+        eli_html = ""
+        if article_title:
+            eli_html = f'<div class="eli-title"><p class="stitle-article-norm">{article_title}</p></div>'
+
+        para_html = ""
+        for i, para in enumerate(paragraphs, 1):
+            para_html += f'<div class="norm"><span class="no-parag">{i}.</span>{para}</div>\n'
+
+        points_html = ""
+        if points:
+            rows = "".join(
+                f'<div class="grid-row">'
+                f'<div class="col-1">{label}</div>'
+                f'<div class="col-2">{text}</div>'
+                f'</div>'
+                for label, text in points
+            )
+            points_html = f'<div class="grid-container grid-list">{rows}</div>'
+
+        table_html = ""
+        if has_table:
+            table_html = (
+                '<table class="borderOj">'
+                "<tr><th>Item</th><th>Value</th></tr>"
+                "<tr><td>CET1</td><td>4.5%</td></tr>"
+                "</table>"
+            )
+
+        formula_html = ""
+        if has_formula:
+            formula_html = '<img src="data:image/png;base64,abc123" alt="formula"/>'
+
+        blocks.append(textwrap.dedent(f"""\
+            <div id="{parent_id}">
+              <div id="art_{num}">
+                <p class="title-article-norm">Article {num}</p>
+                {eli_html}
+                {para_html}
+                {points_html}
+                {table_html}
+                {formula_html}
+              </div>
+            </div>
+        """))
+
+    return f"<!DOCTYPE html><html><body>{''.join(blocks)}</body></html>"
+
+
+def _make_annex_html(annexes: list[dict]) -> str:
+    """
+    Build a minimal EUR-Lex HTML page containing the given annexes.
+
+    Each annex dict may have:
+      annex_id    : annex identifier e.g. "I", "II" (required)
+      title       : annex title (optional)
+      text        : body text (optional)
+    """
+    blocks = []
+    for anx in annexes:
+        annex_id = anx["annex_id"]
+        title = anx.get("title", "")
+        text = anx.get("text", f"Annex {annex_id} content with sufficient length for testing.")
+
+        title_html = f'<p class="title-annex-2">{title}</p>' if title else ""
+        blocks.append(textwrap.dedent(f"""\
+            <div id="anx_{annex_id}">
+              <p class="title-annex-1">ANNEX {annex_id}</p>
+              {title_html}
+              <p>{text}</p>
+            </div>
+        """))
+
+    return f"<!DOCTYPE html><html><body>{''.join(blocks)}</body></html>"
+
+
+# ---------------------------------------------------------------------------
+# Synthetic EUR-Lex HTML fixtures (new DOM structure)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def eurlex_html_en() -> str:
+    """Minimal English CRR HTML with three articles across two sections."""
+    return _make_article_html([
+        {
+            "num": "1",
+            "parent_id": "prt_ONE.tis_I.cpt_1.sct_1",
+            "article_title": "Definitions",
+            "paragraphs": [
+                "For the purposes of this Regulation, the following definitions apply.",
+                "This paragraph has enough text to pass the minimum length requirement.",
+            ],
+        },
+        {
+            "num": "2",
+            "parent_id": "prt_ONE.tis_I.cpt_1.sct_1",
+            "paragraphs": [
+                "Institutions shall apply the provisions set out in this Title.",
+            ],
+        },
+        {
+            "num": "3",
+            "parent_id": "prt_ONE.tis_I.cpt_1.sct_2",
+            "paragraphs": [
+                "The competent authority may grant permission for alternative treatment.",
+            ],
+        },
+    ])
+
+
+@pytest.fixture
+def eurlex_html_it() -> str:
+    """Minimal Italian CRR HTML with one article."""
+    return _make_article_html([
+        {
+            "num": "1",
+            "parent_id": "prt_UNO.tis_I.cpt_1.sct_1",
+            "paragraphs": [
+                "Ai fini del presente regolamento si applicano le seguenti definizioni.",
+                "Questa norma contiene abbastanza testo per il minimo di venti caratteri.",
+            ],
+        },
+    ])
+
+
+@pytest.fixture
+def eurlex_html_pl() -> str:
+    """Minimal Polish CRR HTML with one article."""
+    return _make_article_html([
+        {
+            "num": "1",
+            "parent_id": "prt_PIERWSZA.tis_I.cpt_1.sct_1",
+            "paragraphs": [
+                "Do celów niniejszego rozporządzenia stosuje się poniższe definicje.",
+                "Ten akapit zawiera wystarczającą ilość tekstu by spełnić minimum znaków.",
+            ],
+        },
+    ])
+
+
+@pytest.fixture
+def eurlex_html_no_articles() -> str:
+    """HTML with no article divs at all."""
+    return "<html><body><p>No articles here.</p></body></html>"
+
+
+@pytest.fixture
+def eurlex_html_with_table() -> str:
+    """HTML with one article that contains a borderOj table."""
+    return _make_article_html([
+        {
+            "num": "92",
+            "parent_id": "prt_THREE.tis_I.cpt_1",
+            "article_title": "Own funds requirements",
+            "paragraphs": ["Institutions shall maintain own funds requirements."],
+            "has_table": True,
+        },
+    ])
+
+
+@pytest.fixture
+def eurlex_html_with_formula() -> str:
+    """HTML with one article that contains a formula image."""
+    return _make_article_html([
+        {
+            "num": "429",
+            "parent_id": "prt_THREE.tis_II.cpt_1",
+            "paragraphs": ["The leverage ratio is calculated as follows."],
+            "has_formula": True,
+        },
+    ])
+
+
+@pytest.fixture
+def eurlex_html_with_points() -> str:
+    """HTML with one article that has grid-list lettered points."""
+    return _make_article_html([
+        {
+            "num": "26",
+            "parent_id": "prt_TWO.tis_I.cpt_1",
+            "article_title": "CET1 items",
+            "paragraphs": ["CET1 items of institutions consist of the following:"],
+            "points": [
+                ("(a)", "capital instruments, provided that conditions laid down in Article 28 are met;"),
+                ("(b)", "share premium accounts related to those instruments;"),
+                ("(c)", "retained earnings;"),
+            ],
+        },
+    ])
+
+
+@pytest.fixture
+def eurlex_html_annex() -> str:
+    """HTML with one annex section."""
+    return _make_annex_html([
+        {
+            "annex_id": "I",
+            "title": "List of activities subject to mutual recognition",
+            "text": "The following activities shall be subject to mutual recognition under Article 34.",
+        },
+    ])
+
+
+@pytest.fixture
+def eurlex_html_cross_refs() -> str:
+    """HTML with an article that references other articles and external legislation."""
+    return _make_article_html([
+        {
+            "num": "92",
+            "parent_id": "prt_THREE.tis_I.cpt_1",
+            "paragraphs": [
+                "As defined in Article 26 and Article 36, institutions shall comply with "
+                "Articles 89, 90 and 91. See also Directive 2013/36/EU and "
+                "Regulation (EU) No 648/2012 for related requirements.",
+            ],
+        },
+    ])
+
+
+# ---------------------------------------------------------------------------
+# Paths to real HTML files (may not exist on CI)
+# ---------------------------------------------------------------------------
+
+REPO_ROOT = Path(__file__).parent.parent
+
+
+@pytest.fixture
+def crr_html_en_path() -> Path:
+    p = REPO_ROOT / "crr_raw_en.html"
+    if not p.exists():
+        pytest.skip("crr_raw_en.html not present — skipping file-based test")
+    return p
+
+
+@pytest.fixture
+def crr_html_it_path() -> Path:
+    p = REPO_ROOT / "crr_raw_ita.html"
+    if not p.exists():
+        pytest.skip("crr_raw_ita.html not present — skipping file-based test")
+    return p

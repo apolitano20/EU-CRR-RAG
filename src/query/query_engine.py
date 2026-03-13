@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -92,6 +93,7 @@ class QueryEngine:
         self._engine: Optional[RetrieverQueryEngine] = None
         self._vector_index: Optional[VectorStoreIndex] = None
         self._engine_cache: dict[str, RetrieverQueryEngine] = {}
+        self._engine_cache_lock = threading.Lock()
         self._token_counter: Optional[TokenCountingHandler] = None
         self._reranker = None
 
@@ -108,8 +110,12 @@ class QueryEngine:
             self._reranker = FlagEmbeddingReranker(top_n=RERANK_TOP_N, model=RERANKER_MODEL)
             logger.info("Reranker loaded: %s (top_n=%d)", RERANKER_MODEL, RERANK_TOP_N)
         self._engine = self._build_engine(self._vector_index)
-        self._engine_cache = {}
+        with self._engine_cache_lock:
+            self._engine_cache = {}
         logger.info("QueryEngine ready.")
+
+    def is_loaded(self) -> bool:
+        return self._engine is not None
 
     # ------------------------------------------------------------------
     # Query
@@ -129,15 +135,21 @@ class QueryEngine:
         user_query = _normalise_query(user_query)
         logger.info("[%s] Query: %s (language=%s)", trace_id, user_query, language)
 
-        # Use a cached language-filtered engine to avoid rebuilding the retriever per query
+        # Use a cached language-filtered engine — double-checked locking for thread safety
         if language:
             if language not in self._engine_cache:
-                self._engine_cache[language] = self._build_engine(
-                    self._vector_index, language_filter=language
-                )
+                with self._engine_cache_lock:
+                    if language not in self._engine_cache:
+                        self._engine_cache[language] = self._build_engine(
+                            self._vector_index, language_filter=language
+                        )
             engine = self._engine_cache[language]
         else:
             engine = self._engine
+
+        # Per-request token counter (avoids mixing counts across concurrent requests)
+        token_counter = TokenCountingHandler(verbose=False)
+        Settings.callback_manager = CallbackManager([token_counter])
 
         response = engine.query(user_query)
         source_nodes = response.source_nodes or []
@@ -173,8 +185,8 @@ class QueryEngine:
         ]
 
         latency_ms = round((time.perf_counter() - t0) * 1000)
-        prompt_tokens = self._token_counter.prompt_llm_token_count if self._token_counter else 0
-        completion_tokens = self._token_counter.completion_llm_token_count if self._token_counter else 0
+        prompt_tokens = token_counter.prompt_llm_token_count
+        completion_tokens = token_counter.completion_llm_token_count
 
         logger.info(
             "[%s] Retrieved %d source nodes + %d expanded; "
@@ -257,8 +269,6 @@ class QueryEngine:
     # ------------------------------------------------------------------
 
     def _configure_settings(self) -> None:
-        self._token_counter = TokenCountingHandler(verbose=False)
-        Settings.callback_manager = CallbackManager([self._token_counter])
         Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
         Settings.llm = OpenAI(model=self.llm_model, api_key=self.openai_api_key)
 

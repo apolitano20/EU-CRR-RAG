@@ -8,6 +8,7 @@ Endpoints:
 from __future__ import annotations
 
 import logging
+import os
 import time
 import threading
 from contextlib import asynccontextmanager
@@ -18,6 +19,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -43,8 +45,15 @@ _query_engine = QueryEngine(vector_store=_vector_store, indexer=_indexer)
 _ingestion_lock = threading.Lock()
 
 
+_REQUIRED_ENV_VARS = ("OPENAI_API_KEY", "QDRANT_URL", "QDRANT_API_KEY")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    missing = [v for v in _REQUIRED_ENV_VARS if not os.getenv(v)]
+    if missing:
+        raise RuntimeError(f"Missing required env vars: {', '.join(missing)}. Check your .env file.")
+
     logger.info("Loading query engine from persisted index...")
     try:
         _query_engine.load()
@@ -62,6 +71,13 @@ app = FastAPI(
     description="Regulatory compliance Q&A over EU Capital Requirements Regulation (CRR).",
     version="0.2.0",
     lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
 )
 
 
@@ -138,7 +154,7 @@ def _detect_language(text: str) -> Optional[str]:
 
 @app.post("/api/query", response_model=QueryResponse)
 def query(request: QueryRequest) -> QueryResponse:
-    if _query_engine._engine is None:
+    if not _query_engine.is_loaded():
         raise HTTPException(
             status_code=503,
             detail="Index not loaded. Run ingestion first.",
@@ -183,6 +199,6 @@ def ingest(request: IngestRequest, background_tasks: BackgroundTasks) -> IngestR
 def health() -> dict:
     return {
         "status": "ok",
-        "index_loaded": _query_engine._engine is not None,
+        "index_loaded": _query_engine.is_loaded(),
         "vector_store_items": _vector_store.item_count,
     }

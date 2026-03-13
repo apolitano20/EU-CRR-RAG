@@ -26,9 +26,9 @@ from llama_index.core.vector_stores.types import (
     MetadataFilters,
     VectorStoreQueryMode,
 )
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.llms.openai import OpenAI
 
+from src.indexing.bge_m3_sparse import BGEm3Embedding
 from src.indexing.index_builder import HierarchicalIndexer
 from src.indexing.vector_store import VectorStore
 
@@ -38,7 +38,6 @@ RETRIEVAL_TOP_K = 12       # first-stage candidates passed to reranker
 RERANK_TOP_N = 6           # final results after reranking
 SIMILARITY_CUTOFF = 0.3
 RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
-EMBED_MODEL = "BAAI/bge-m3"
 LLM_MODEL = "gpt-4o"
 
 _LEGAL_QA_TEMPLATE = PromptTemplate(
@@ -94,15 +93,8 @@ _ABBREV_RE = re.compile(r"\b(" + "|".join(re.escape(k) for k in _ABBREV_MAP) + r
 # Handles: "art. 92", "Art 92", "article92", "§92" → "Article 92"
 _ART_RE = re.compile(r"\b(?:art(?:icle|\.)?)\s*(\d[\w]*)", re.IGNORECASE)
 
-# Detect simple single-article lookup queries for task-type routing.
-# Matches: "Article 92", "What does Article 92 say?", "Explain Article 92"
-# Does NOT match: "Article 92 requirements", "Article 92 and Article 93"
-_DIRECT_LOOKUP_RE = re.compile(
-    r"^(?:(?:what(?:\s+does)?|explain|describe|summarise|summarize|define|tell\s+me\s+about)\s+)?"
-    r"Article\s+(\d[\w]*)"
-    r"(?:\s*(?:say|mean|require|state|cover|provide|set\s+out))?\s*\??$",
-    re.IGNORECASE,
-)
+# Matches any canonical "Article N" reference after query normalisation.
+_ARTICLE_REF_RE = re.compile(r"\bArticle\s+(\d[\w]*)\b", re.IGNORECASE)
 
 
 def _normalise_query(query: str) -> str:
@@ -112,9 +104,18 @@ def _normalise_query(query: str) -> str:
 
 
 def _detect_direct_article_lookup(query: str) -> Optional[str]:
-    """Return article number if the query is a direct single-article lookup, else None."""
-    m = _DIRECT_LOOKUP_RE.match(query)
-    return m.group(1) if m else None
+    """Return article number if the query references exactly one article, else None.
+
+    Handles any phrasing that mentions a single article:
+      - "What are the requirements of Article 73 of the CRR?"
+      - "Explain Article 92"
+      - "Does Article 428 apply to investment firms?"
+    Does NOT trigger when multiple distinct articles are mentioned, so that
+    cross-article questions ("How do Article 92 and 93 relate?") use normal retrieval.
+    """
+    matches = _ARTICLE_REF_RE.findall(query)
+    unique = set(matches)
+    return unique.pop() if len(unique) == 1 else None
 
 
 @dataclass
@@ -218,6 +219,9 @@ class QueryEngine:
         t_ret = time.perf_counter()
         if direct_art:
             source_nodes = self._direct_article_retrieve(direct_art, user_query, language)
+            if not source_nodes:
+                logger.warning("[%s] Direct lookup for Article %s returned no nodes — falling back to semantic retrieval", trace_id, direct_art)
+                source_nodes = engine.retrieve(query_bundle)
         else:
             source_nodes = engine.retrieve(query_bundle)
         t_retrieval_ms = round((time.perf_counter() - t_ret) * 1000)
@@ -355,10 +359,72 @@ class QueryEngine:
 
         return expanded
 
+    def get_article(
+        self, article_num: str, language: Optional[str] = None
+    ) -> Optional[dict]:
+        """Return full article content + metadata for the document viewer.
+
+        Retrieves all nodes for the given article number and concatenates
+        their text to produce the complete article body.
+
+        Args:
+            article_num: Article number as string (e.g. "92").
+            language: Optional ISO language code to filter by (e.g. "en").
+
+        Returns:
+            Dict with article data, or None if not found / index not loaded.
+        """
+        if self._vector_index is None:
+            return None
+
+        filters_list: list = [
+            MetadataFilter(key="article", value=article_num, operator=FilterOperator.EQ),
+        ]
+        if language:
+            filters_list.append(
+                MetadataFilter(key="language", value=language, operator=FilterOperator.EQ)
+            )
+
+        retriever = self._vector_index.as_retriever(
+            similarity_top_k=20,
+            vector_store_query_mode=VectorStoreQueryMode.HYBRID,
+            filters=MetadataFilters(filters=filters_list),
+        )
+        nodes = retriever.retrieve(f"Article {article_num}")
+
+        if not nodes:
+            return None
+
+        full_text = "\n\n".join(
+            node.node.get_content()
+            for node in nodes
+            if node.node.get_content().strip()
+        )
+
+        meta = nodes[0].node.metadata
+        ref_csv: str = meta.get("referenced_articles", "") or ""
+        referenced_articles = [r.strip() for r in ref_csv.split(",") if r.strip()]
+
+        return {
+            "article": article_num,
+            "article_title": meta.get("article_title", ""),
+            "text": full_text,
+            "part": meta.get("part"),
+            "title": meta.get("title"),
+            "chapter": meta.get("chapter"),
+            "section": meta.get("section"),
+            "referenced_articles": referenced_articles,
+            "language": meta.get("language") or language or "en",
+        }
+
     def _direct_article_retrieve(
         self, article_num: str, query_str: str, language: Optional[str]
     ) -> list:
-        """Metadata-filtered retrieval for a specific article number, bypassing vector ranking."""
+        """Metadata-filtered retrieval for a specific article number, bypassing vector ranking.
+
+        Uses DEFAULT (dense-only) mode because we have an exact metadata filter — hybrid
+        sparse retrieval can return zero results when the filter is very selective.
+        """
         filters_list = [
             MetadataFilter(key="article", value=article_num, operator=FilterOperator.EQ),
         ]
@@ -367,8 +433,8 @@ class QueryEngine:
                 MetadataFilter(key="language", value=language, operator=FilterOperator.EQ)
             )
         retriever = self._vector_index.as_retriever(
-            similarity_top_k=2,
-            vector_store_query_mode=VectorStoreQueryMode.HYBRID,
+            similarity_top_k=10,
+            vector_store_query_mode=VectorStoreQueryMode.DEFAULT,
             filters=MetadataFilters(filters=filters_list),
         )
         return retriever.retrieve(query_str)
@@ -378,7 +444,7 @@ class QueryEngine:
     # ------------------------------------------------------------------
 
     def _configure_settings(self) -> None:
-        Settings.embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL)
+        Settings.embed_model = BGEm3Embedding()
         Settings.llm = OpenAI(model=self.llm_model, api_key=self.openai_api_key)
 
     def _build_engine(

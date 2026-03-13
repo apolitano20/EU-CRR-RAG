@@ -1,0 +1,53 @@
+"use client";
+
+import { useState } from "react";
+import type { KeyboardEvent } from "react";
+
+interface QuestionInputProps {
+  onSubmit: (query: string) => void;
+  isLoading: boolean;
+}
+
+export default function QuestionInput({ onSubmit, isLoading }: QuestionInputProps) {
+  const [value, setValue] = useState("");
+
+  const handleSubmit = () => {
+    const trimmed = value.trim();
+    if (!trimmed || isLoading) return;
+    onSubmit(trimmed);
+    setValue("");
+  };
+
+  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit();
+    }
+  };
+
+  return (
+    <div className="flex gap-2 items-end">
+      <textarea
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={handleKeyDown}
+        placeholder="Ask a compliance question… (Enter to submit, Shift+Enter for new line)"
+        rows={2}
+        disabled={isLoading}
+        className="flex-1 resize-none px-3 py-2 text-sm border border-slate-300 rounded-lg
+          focus:outline-none focus:ring-2 focus:ring-[#003399] focus:border-transparent
+          disabled:bg-slate-50 disabled:text-slate-400 placeholder:text-slate-400"
+      />
+      <button
+        onClick={handleSubmit}
+        disabled={isLoading || !value.trim()}
+        className="px-4 py-2 bg-[#003399] text-white text-sm font-medium rounded-lg
+          hover:bg-[#002277] active:bg-[#001155]
+          disabled:opacity-40 disabled:cursor-not-allowed
+          transition-colors whitespace-nowrap"
+      >
+        {isLoading ? "…" : "Ask"}
+      </button>
+    </div>
+  );
+}

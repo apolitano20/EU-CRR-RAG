@@ -331,3 +331,24 @@ Enforced structured answer format in LLM prompt (`f9aad79`):
 ```
 
 This was item #9 from the RAG checklist gap analysis (checklist #29: domain-specific answer structure).
+
+---
+
+## 2026-03-13 — Performance and retrieval fixes (launch day)
+
+### Performance fixes
+| Issue | Fix | File |
+|-------|-----|------|
+| API hangs on query (OOM) | Removed double BGE-M3 loading: `HuggingFaceEmbedding` was loading a second 570MB copy alongside singleton. Switched back to `BGEm3Embedding` wrapper in `_configure_settings()` | `query_engine.py`, `bge_m3_sparse.py` |
+| Frontend dev mode slow | Changed `frontend/Dockerfile` from `npm run dev` to multi-stage production build (`next build` + `node server.js`) | `frontend/Dockerfile` |
+| Port conflicts on relaunch | Created `launch.bat`: cleans stale `.next` cache, activates `.venv`, forces ports 8080 (API) + 3001 (frontend) | `launch.bat` |
+
+### Retrieval improvements
+| Issue | Fix | File |
+|-------|-----|------|
+| Direct article lookup too strict | Broadened `_detect_direct_article_lookup()` to trigger on ANY query mentioning exactly one article ("What are the requirements of Article 73?" now matches) instead of only strict patterns | `query_engine.py` |
+| HYBRID mode incompatible with strict filters | Changed `_direct_article_retrieve()` from `VectorStoreQueryMode.HYBRID` to `DEFAULT` (dense-only); sparse pass was returning zero results with article="N" filter | `query_engine.py` |
+| No fallback for empty direct lookup | Added fallback: if direct article lookup returns 0 nodes, retry with semantic retrieval | `query_engine.py` |
+
+### Outstanding issue
+Query "What are the requirements of Article 73?" still returns "insufficient context". Root cause under investigation — Article 73 exists in HTML but may have metadata mismatch or be filtered upstream. Next step: check API logs for "Direct lookup returned no nodes" warning.

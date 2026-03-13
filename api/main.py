@@ -124,6 +124,18 @@ class IngestResponse(BaseModel):
     message: str
 
 
+class ArticleResponse(BaseModel):
+    article: str
+    article_title: str
+    text: str
+    part: Optional[str] = None
+    title: Optional[str] = None
+    chapter: Optional[str] = None
+    section: Optional[str] = None
+    referenced_articles: list[str]
+    language: str
+
+
 # ------------------------------------------------------------------
 # Language detection heuristic
 # ------------------------------------------------------------------
@@ -171,6 +183,22 @@ def query(request: QueryRequest) -> QueryResponse:
         sources=result.sources,
         trace_id=result.trace_id,
     )
+
+
+@app.get("/api/article/{article_id}", response_model=ArticleResponse)
+def get_article(article_id: str, language: Optional[str] = None) -> ArticleResponse:
+    if not _query_engine.is_loaded():
+        raise HTTPException(
+            status_code=503,
+            detail="Index not loaded. Run ingestion first.",
+        )
+    result = _query_engine.get_article(article_id, language=language)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Article {article_id} not found.",
+        )
+    return ArticleResponse(**result)
 
 
 @app.post("/api/ingest", response_model=IngestResponse)

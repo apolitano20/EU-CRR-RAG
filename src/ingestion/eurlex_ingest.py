@@ -297,24 +297,37 @@ class EurLexIngester:
                 span = elem.find("span", class_="no-parag")
                 if span:
                     num = span.get_text(strip=True)
-                    # Get the text without the no-parag span
-                    text_parts = []
+                    # Collect only direct inline/text/p children as the intro sentence.
+                    # div children (grid-lists, nested content) are walked separately so
+                    # their internal structure is preserved (correct point attribution).
+                    intro_parts: list[str] = []
+                    div_children = []
                     for child in elem.children:
                         if hasattr(child, "get") and "no-parag" in (child.get("class") or []):
                             continue
-                        if hasattr(child, "get_text"):
-                            t = child.get_text(" ", strip=True)
-                        else:
+                        if not hasattr(child, "name") or child.name is None:
+                            # Bare text node
                             t = str(child).strip()
-                        if t:
-                            text_parts.append(t)
-                    body = " ".join(text_parts)
-                    parts.append(f"{num} {body}")
+                            if t:
+                                intro_parts.append(t)
+                        elif child.name in ("p", "span", "a", "em", "strong"):
+                            t = child.get_text(" ", strip=True)
+                            if t:
+                                intro_parts.append(t)
+                        elif child.name == "div":
+                            div_children.append(child)
+                    if intro_parts:
+                        parts.append(f"{num} {' '.join(intro_parts)}")
+                    else:
+                        parts.append(num)
+                    # Recurse into div children so grid-lists etc. are formatted properly
+                    for child in div_children:
+                        walk(child)
                 else:
                     body = elem.get_text(" ", strip=True)
                     if body:
                         parts.append(body)
-                return  # don't recurse into norm divs
+                return
 
             # Lettered/numbered points grid: <div class="grid-container grid-list">
             if tag == "div" and "grid-container" in classes and "grid-list" in classes:

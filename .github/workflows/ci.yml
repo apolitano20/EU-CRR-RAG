@@ -5,6 +5,7 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  workflow_dispatch:  # enables "Run workflow" button in GitHub Actions UI
 
 jobs:
   unit-tests:

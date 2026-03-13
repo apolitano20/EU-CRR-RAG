@@ -32,8 +32,10 @@ from src.indexing.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 
-SIMILARITY_TOP_K = 6
+RETRIEVAL_TOP_K = 12       # first-stage candidates passed to reranker
+RERANK_TOP_N = 6           # final results after reranking
 SIMILARITY_CUTOFF = 0.3
+RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
 EMBED_MODEL = "BAAI/bge-m3"
 LLM_MODEL = "gpt-4o"
 
@@ -79,16 +81,19 @@ class QueryEngine:
         openai_api_key: Optional[str] = None,
         llm_model: str = LLM_MODEL,
         max_cross_ref_expansions: int = 3,
+        use_reranker: bool = True,
     ) -> None:
         self.vector_store = vector_store
         self.indexer = indexer
         self.openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
         self.llm_model = llm_model
         self.max_cross_ref_expansions = max_cross_ref_expansions
+        self.use_reranker = use_reranker
         self._engine: Optional[RetrieverQueryEngine] = None
         self._vector_index: Optional[VectorStoreIndex] = None
         self._engine_cache: dict[str, RetrieverQueryEngine] = {}
         self._token_counter: Optional[TokenCountingHandler] = None
+        self._reranker = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -98,6 +103,10 @@ class QueryEngine:
         """Build the retriever chain from the persisted index."""
         self._vector_index = self.indexer.load()  # may set Settings.llm = None as side effect
         self._configure_settings()                 # restore OpenAI LLM after indexer resets it
+        if self.use_reranker:
+            from llama_index.postprocessor.flag_embedding_reranker import FlagEmbeddingReranker
+            self._reranker = FlagEmbeddingReranker(top_n=RERANK_TOP_N, model=RERANKER_MODEL)
+            logger.info("Reranker loaded: %s (top_n=%d)", RERANKER_MODEL, RERANK_TOP_N)
         self._engine = self._build_engine(self._vector_index)
         self._engine_cache = {}
         logger.info("QueryEngine ready.")
@@ -275,7 +284,7 @@ class QueryEngine:
 
         # Articles are self-contained units — no AutoMergingRetriever needed
         vector_retriever = vector_index.as_retriever(
-            similarity_top_k=SIMILARITY_TOP_K,
+            similarity_top_k=RETRIEVAL_TOP_K,
             vector_store_query_mode=VectorStoreQueryMode.HYBRID,
             filters=filters,
         )
@@ -285,9 +294,14 @@ class QueryEngine:
             verbose=False,
         )
 
+        # Postprocessors: similarity filter first, then reranker (if enabled)
+        postprocessors = [SimilarityPostprocessor(similarity_cutoff=SIMILARITY_CUTOFF)]
+        if self._reranker is not None:
+            postprocessors.append(self._reranker)
+
         return RetrieverQueryEngine.from_args(
             retriever=vector_retriever,
             response_synthesizer=synthesizer,
-            node_postprocessors=[SimilarityPostprocessor(similarity_cutoff=SIMILARITY_CUTOFF)],
+            node_postprocessors=postprocessors,
             verbose=False,
         )

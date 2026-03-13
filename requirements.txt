@@ -9,6 +9,7 @@ llama-index-core>=0.10.0
 llama-index-embeddings-huggingface>=0.2.0
 llama-index-llms-openai>=0.1.0
 llama-index-vector-stores-qdrant>=0.3.0
+llama-index-postprocessor-flag-embedding-reranker>=0.1.0
 
 # LlamaParse (optional – set LLAMA_CLOUD_API_KEY to enable)
 llama-parse>=0.4.0

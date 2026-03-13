@@ -30,6 +30,10 @@ jobs:
           pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Run unit tests
+        env:
+          OPENAI_API_KEY: dummy-key-for-unit-tests
+          QDRANT_URL: http://localhost:6333
+          QDRANT_API_KEY: dummy-key-for-unit-tests
         run: pytest tests/unit/ -v --tb=short
 
   integration-tests:

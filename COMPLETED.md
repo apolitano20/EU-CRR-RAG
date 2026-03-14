@@ -352,3 +352,26 @@ This was item #9 from the RAG checklist gap analysis (checklist #29: domain-spec
 
 ### Outstanding issue
 Query "What are the requirements of Article 73?" still returns "insufficient context". Root cause under investigation — Article 73 exists in HTML but may have metadata mismatch or be filtered upstream. Next step: check API logs for "Direct lookup returned no nodes" warning.
+
+---
+
+## 2026-03-14 — UI/UX quick wins (session 2)
+
+### Changes
+
+| # | Change | Files |
+|---|--------|-------|
+| 1 | **"Sources" → "Cross-References"** — Renamed label in chip list and clipboard markdown | `SourceChipList.tsx`, `AnswerCard.tsx` |
+| 2 | **Language filter for cross-references** — Backend returns `language` in `QueryResponse`; frontend threads it through `AnswerCard` → `SourceChipList` and filters sources by query language before deduplication | `api/main.py`, `types.ts`, `ChatPanel.tsx`, `AnswerCard.tsx`, `SourceChipList.tsx` |
+| 3 | **Inline list item indentation** — `ProvisionText.tsx` now splits inline `(a)/(b)/(i)` items (preceded by `;` or `:`) onto separate lines and renders with nested indentation: lettered items (`ml-5`) under numbered paragraphs, roman numeral sub-items (`ml-10`) nested deeper | `ProvisionText.tsx` |
+| 4 | **External regulation refs no longer clickable** — `ProvisionText.tsx` detects when "Article N" is followed by "of Regulation/Directive/Decision/..." and renders as plain text. Handles ranges like "Articles 10 to 14 of Regulation (EU) No 1093/2010" | `ProvisionText.tsx` |
+| 5 | **External regulation refs removed from cross-ref metadata** — Fixed `_extract_cross_references()` in ingestion to exclude "Article N of Regulation/Directive/..." patterns (EN/IT/PL). Patched 942 existing Qdrant points via `scripts/fix_cross_refs.py` (payload update, no re-embedding). Cross-reference chips no longer show articles belonging to external regulations. | `eurlex_ingest.py`, `scripts/fix_cross_refs.py` |
+
+### UI/UX quick win scorecard
+- Chat history — ✅ (done prior session)
+- Article text formatting — ✅ (done prior session, improved this session)
+- "Sources" → "Cross-References" — ✅
+- Language filter for cross-references — ✅
+- Source relevance — ✅ (confirmed fine)
+- Citation order — ✅ (confirmed fine)
+- External regulation refs scoped — ✅ (frontend + backend metadata)

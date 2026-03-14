@@ -131,6 +131,28 @@ class TestQueryEndpoint:
         _, kwargs = mock_query.call_args
         assert kwargs.get("language") == "it"
 
+    def test_response_includes_language_field(self, loaded_client, app_module):
+        """QueryResponse should include the detected/preferred language."""
+        client, mod = loaded_client
+        from src.query.query_engine import QueryResult
+        mod._query_engine.query = MagicMock(
+            return_value=QueryResult(answer="ok", sources=[], trace_id="t1")
+        )
+        r = client.post("/api/query", json={"query": "CET1?", "preferred_language": "it"})
+        body = r.json()
+        assert body["language"] == "it"
+
+    def test_response_language_null_when_not_detected(self, loaded_client, app_module):
+        """English queries have no diacritics, so language should be null."""
+        client, mod = loaded_client
+        from src.query.query_engine import QueryResult
+        mod._query_engine.query = MagicMock(
+            return_value=QueryResult(answer="ok", sources=[], trace_id="t1")
+        )
+        r = client.post("/api/query", json={"query": "What is CET1?"})
+        body = r.json()
+        assert body["language"] is None
+
     def test_missing_query_field_returns_422(self, client):
         r = client.post("/api/query", json={})
         assert r.status_code == 422

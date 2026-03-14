@@ -42,17 +42,18 @@ const markdownComponents: Components = {
 interface AnswerCardProps {
   answer: string;
   sources: SourceNode[];
+  queryLanguage?: string;
   onSourceClick: (articleId: string, language?: string) => void;
 }
 
-export default function AnswerCard({ answer, sources, onSourceClick }: AnswerCardProps) {
+export default function AnswerCard({ answer, sources, queryLanguage, onSourceClick }: AnswerCardProps) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
     const sourcesMarkdown = sources
       .map((s) => `- **${s.metadata.article || "unknown"}** (score: ${s.score.toFixed(3)})`)
       .join("\n");
-    const md = `${answer}\n\n### Sources\n${sourcesMarkdown}`;
+    const md = `${answer}\n\n### Cross-References\n${sourcesMarkdown}`;
     await navigator.clipboard.writeText(md);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
@@ -84,7 +85,7 @@ export default function AnswerCard({ answer, sources, onSourceClick }: AnswerCar
           {answer}
         </ReactMarkdown>
       </div>
-      <SourceChipList sources={sources} onSourceClick={onSourceClick} />
+      <SourceChipList sources={sources} queryLanguage={queryLanguage} onSourceClick={onSourceClick} />
     </div>
   );
 }

@@ -19,6 +19,7 @@ export interface QueryResponse {
   answer: string;
   sources: SourceNode[];
   trace_id: string;
+  language?: string | null;
 }
 
 export interface ArticleResponse {

@@ -5,11 +5,26 @@ import type { ReactNode } from "react";
 // Matches "Article 92" or "Articles 92" — captures the word and number separately
 const ART_REF_RE = /\b(Articles?)\s+(\d[\w]*)/g;
 
-// Grid-list items stored by ingester with leading whitespace: "  (a) text", "  (i) text"
-const GRID_ITEM_RE = /^\s+\(/;
+// Text following an Article ref that signals an external regulation (not CRR)
+const EXTERNAL_CONTEXT_RE = /^\s*(?:to\s+\d[\w]*\s+)?of\s+(?:Regulation|Directive|Decision|Delegated|Implementing)/i;
 
-// Numbered paragraphs stored by ingester as "1. text", "2. text"
+// Lettered/roman list items: "(a) text", "(i) text", optionally with leading whitespace
+const GRID_ITEM_RE = /^\s*\([a-z]+\)\s/i;
+
+// Roman numeral sub-items: "(i) text", "(ii) text" — deeper nesting
+const ROMAN_ITEM_RE = /^\s*\((?:i{1,3}|iv|vi{0,3})\)\s/i;
+
+// Numbered paragraphs: "1. text", "2. text"
 const NUMBERED_PARA_RE = /^\d+\.\s+/;
+
+// Split inline list items like "(a) ...; (b) ...; (i) ..." onto separate lines.
+// Only matches single letters (a)-(z) or short roman numerals (i)-(viii) preceded
+// by a semicolon/colon or sentence-ending punctuation to avoid false splits.
+const INLINE_ITEM_RE = /(?:;\s*|:\s+)(\([a-z]{1,4}\)\s)/gi;
+
+function splitInlineItems(text: string): string {
+  return text.replace(INLINE_ITEM_RE, ";\n$1");
+}
 
 interface ProvisionTextProps {
   text: string;
@@ -26,17 +41,24 @@ function parseRefs(text: string, onArticleRef: (id: string) => void): ReactNode[
     if (match.index > lastIndex) {
       parts.push(text.slice(lastIndex, match.index));
     }
-    const [, word, num] = match;
-    parts.push(
-      <button
-        key={`art-${num}-${match.index}`}
-        onClick={() => onArticleRef(num)}
-        className="text-[#003399] hover:text-[#002277] hover:underline font-medium cursor-pointer"
-      >
-        {word} {num}
-      </button>
-    );
-    lastIndex = match.index + match[0].length;
+    const [fullMatch, word, num] = match;
+    const textAfter = text.slice(match.index + fullMatch.length);
+
+    // If followed by "of Regulation/Directive/...", it's an external ref — render as plain text
+    if (EXTERNAL_CONTEXT_RE.test(textAfter)) {
+      parts.push(`${word} ${num}`);
+    } else {
+      parts.push(
+        <button
+          key={`art-${num}-${match.index}`}
+          onClick={() => onArticleRef(num)}
+          className="text-[#003399] hover:text-[#002277] hover:underline font-medium cursor-pointer"
+        >
+          {word} {num}
+        </button>
+      );
+    }
+    lastIndex = match.index + fullMatch.length;
   }
 
   if (lastIndex < text.length) {
@@ -48,13 +70,15 @@ function parseRefs(text: string, onArticleRef: (id: string) => void): ReactNode[
 
 export default function ProvisionText({ text, onArticleRef }: ProvisionTextProps) {
   // Split on double newlines first (node chunk boundaries from get_article join),
-  // then on single newlines within each chunk (ingest-level line structure).
+  // then split inline list items onto their own lines.
   const chunks = text.split(/\n\n+/);
 
   return (
     <div className="space-y-4 text-sm leading-relaxed text-slate-700">
       {chunks.map((chunk, ci) => {
-        const lines = chunk.split("\n").filter((l) => l.trim());
+        // Split inline (a)/(b)/(i) items onto separate lines
+        const expanded = splitInlineItems(chunk);
+        const lines = expanded.split("\n").filter((l) => l.trim());
         if (lines.length === 0) return null;
 
         return (
@@ -62,12 +86,24 @@ export default function ProvisionText({ text, onArticleRef }: ProvisionTextProps
             {lines.map((line, li) => {
               const trimmed = line.trim();
 
-              // Lettered/numbered list item — stored with leading spaces by ingester
-              if (GRID_ITEM_RE.test(line)) {
+              // Roman numeral sub-item — deeper indent: (i), (ii), (iii)
+              if (ROMAN_ITEM_RE.test(trimmed)) {
                 return (
                   <div
                     key={li}
-                    className="pl-5 border-l-2 border-slate-200 py-0.5 text-slate-600"
+                    className="ml-10 pl-4 border-l-2 border-slate-200 py-0.5 text-slate-600"
+                  >
+                    {parseRefs(trimmed, onArticleRef)}
+                  </div>
+                );
+              }
+
+              // Lettered list item: (a), (b), (c), (d), (e)
+              if (GRID_ITEM_RE.test(trimmed)) {
+                return (
+                  <div
+                    key={li}
+                    className="ml-5 pl-4 border-l-2 border-slate-200 py-0.5 text-slate-600"
                   >
                     {parseRefs(trimmed, onArticleRef)}
                   </div>

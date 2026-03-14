@@ -4,13 +4,18 @@ import type { SourceNode } from "@/lib/types";
 
 interface SourceChipListProps {
   sources: SourceNode[];
+  queryLanguage?: string;
   onSourceClick: (articleId: string, language?: string) => void;
 }
 
-export default function SourceChipList({ sources, onSourceClick }: SourceChipListProps) {
-  // Deduplicate by article only — first occurrence wins (highest relevance score)
+export default function SourceChipList({ sources, queryLanguage, onSourceClick }: SourceChipListProps) {
+  // Filter by query language when available, then deduplicate by article
+  const languageFiltered = queryLanguage
+    ? sources.filter((s) => !s.metadata.language || s.metadata.language === queryLanguage)
+    : sources;
+
   const seen = new Set<string>();
-  const unique = sources.filter((s) => {
+  const unique = languageFiltered.filter((s) => {
     if (!s.metadata.article) return false;
     const key = s.metadata.article;
     if (seen.has(key)) return false;
@@ -23,7 +28,7 @@ export default function SourceChipList({ sources, onSourceClick }: SourceChipLis
   return (
     <div className="border-t border-slate-100 pt-3">
       <p className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">
-        Sources
+        Cross-References
       </p>
       <div className="flex flex-wrap gap-2">
         {unique.map((source, i) => {

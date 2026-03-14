@@ -111,6 +111,7 @@ class QueryResponse(BaseModel):
     answer: str
     sources: list[dict]
     trace_id: str
+    language: Optional[str] = None
 
 
 class IngestRequest(BaseModel):
@@ -182,6 +183,7 @@ def query(request: QueryRequest) -> QueryResponse:
         answer=result.answer,
         sources=result.sources,
         trace_id=result.trace_id,
+        language=lang,
     )
 
 

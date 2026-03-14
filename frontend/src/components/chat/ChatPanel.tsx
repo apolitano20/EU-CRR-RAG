@@ -75,6 +75,7 @@ export default function ChatPanel({ onArticleSelect }: ChatPanelProps) {
               <AnswerCard
                 answer={msg.result.answer}
                 sources={msg.result.sources}
+                queryLanguage={msg.result.language ?? undefined}
                 onSourceClick={handleSourceClick}
               />
             </div>

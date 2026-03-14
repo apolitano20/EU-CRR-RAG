@@ -100,14 +100,16 @@ class TestDirectArticleLookup:
     def test_article_with_trailing_question(self):
         assert _detect_direct_article_lookup("Article 92?") == "92"
 
-    def test_complex_query_not_matched(self):
-        assert _detect_direct_article_lookup("What are the requirements under Article 92?") is None
+    def test_complex_query_with_single_article_matched(self):
+        # Broadened: any query mentioning exactly one article triggers direct lookup
+        assert _detect_direct_article_lookup("What are the requirements under Article 92?") == "92"
 
     def test_multiple_articles_not_matched(self):
         assert _detect_direct_article_lookup("Article 92 and Article 93") is None
 
-    def test_article_with_extra_words_not_matched(self):
-        assert _detect_direct_article_lookup("Article 92 requirements for capital") is None
+    def test_article_with_extra_words_matched(self):
+        # Broadened: single article mention triggers direct lookup regardless of surrounding text
+        assert _detect_direct_article_lookup("Article 92 requirements for capital") == "92"
 
     def test_no_article_not_matched(self):
         assert _detect_direct_article_lookup("What are own funds requirements?") is None

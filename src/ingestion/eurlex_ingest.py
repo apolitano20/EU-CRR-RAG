@@ -271,6 +271,7 @@ class EurLexIngester:
         SKIP_CLASSES = {"title-article-norm", "eli-title", "stitle-article-norm", "title-annex-1"}
 
         parts: list[str] = []
+        _consumed: set[int] = set()  # id() of elements whose text was already extracted
 
         def _formula_placeholder(src: str) -> str:
             if formula_images is not None:
@@ -282,6 +283,8 @@ class EurLexIngester:
         def walk(elem) -> None:
             if not hasattr(elem, "name") or elem.name is None:
                 return
+            if id(elem) in _consumed:
+                return
 
             classes = set(elem.get("class") or [])
             tag = elem.name
@@ -292,21 +295,22 @@ class EurLexIngester:
             if tag in ("script", "style", "nav", "footer"):
                 return
 
-            # Numbered paragraph: <div class="norm"><span class="no-parag">N.</span>...
+            # Numbered paragraph: <div class="norm"> with a <span class="no-parag">N.</span>
+            # EUR-Lex also wraps paragraph content in <div class="norm inline-element"> —
+            # those have NO no-parag span and must be recursed into, not flattened.
             if tag == "div" and "norm" in classes:
                 span = elem.find("span", class_="no-parag")
                 if span:
                     num = span.get_text(strip=True)
                     # Collect only direct inline/text/p children as the intro sentence.
-                    # div children (grid-lists, nested content) are walked separately so
-                    # their internal structure is preserved (correct point attribution).
+                    # div children (grid-lists, inline-element wrappers) are walked
+                    # separately so their internal structure is preserved.
                     intro_parts: list[str] = []
                     div_children = []
                     for child in elem.children:
                         if hasattr(child, "get") and "no-parag" in (child.get("class") or []):
                             continue
                         if not hasattr(child, "name") or child.name is None:
-                            # Bare text node
                             t = str(child).strip()
                             if t:
                                 intro_parts.append(t)
@@ -318,21 +322,69 @@ class EurLexIngester:
                             div_children.append(child)
                     if intro_parts:
                         parts.append(f"{num} {' '.join(intro_parts)}")
+                    elif div_children:
+                        # The paragraph text is inside a wrapper div (e.g.
+                        # <div class="norm inline-element">).  Extract the
+                        # leading text from the first wrapper and combine it
+                        # with the paragraph number so we get "1. Text..."
+                        # instead of "1." on its own line.
+                        first = div_children[0]
+                        first_classes = set(first.get("class") or [])
+                        first_text = ""
+                        if "inline-element" in first_classes:
+                            child_elems = [
+                                c for c in first.children
+                                if hasattr(c, "name") and c.name is not None
+                            ]
+                            if not child_elems:
+                                # Text-only wrapper: grab all text, mark
+                                # entire div consumed (walker would add it
+                                # again otherwise).
+                                first_text = first.get_text(" ", strip=True)
+                                if first_text:
+                                    _consumed.add(id(first))
+                            else:
+                                # Has element children — grab first <p> text
+                                first_p = first.find("p", recursive=False)
+                                if first_p:
+                                    first_text = first_p.get_text(" ", strip=True)
+                                    if first_text:
+                                        _consumed.add(id(first_p))
+                        if first_text:
+                            parts.append(f"{num} {first_text}")
+                        else:
+                            parts.append(num)
                     else:
                         parts.append(num)
-                    # Recurse into div children so grid-lists etc. are formatted properly
                     for child in div_children:
                         walk(child)
                 else:
-                    body = elem.get_text(" ", strip=True)
-                    if body:
-                        parts.append(body)
+                    # Wrapper div (e.g. "norm inline-element") — recurse into children
+                    # so nested grid-lists and paragraphs are formatted correctly.
+                    # Some wrapper divs contain only text nodes (no <p> wrapper),
+                    # e.g. <div class="norm inline-element">Plain text here.</div>.
+                    # Detect this and extract text directly to avoid silent data loss.
+                    child_elements = [
+                        c for c in elem.children
+                        if hasattr(c, "name") and c.name is not None
+                    ]
+                    if child_elements:
+                        for child in elem.children:
+                            walk(child)
+                    else:
+                        text = elem.get_text(" ", strip=True)
+                        if text and len(text) >= 5:
+                            parts.append(text)
                 return
 
             # Lettered/numbered points grid: <div class="grid-container grid-list">
+            # EUR-Lex uses two column layouts:
+            #   Layout A (older): grid-row > [label-div, text-div]
+            #   Layout B (newer): grid-list-column-1 (label) + grid-list-column-2 (text)
             if tag == "div" and "grid-container" in classes and "grid-list" in classes:
                 rows = elem.find_all("div", class_="grid-row", recursive=False)
                 if rows:
+                    # Layout A
                     for row in rows:
                         cols = row.find_all("div", recursive=False)
                         if len(cols) >= 2:
@@ -342,10 +394,34 @@ class EurLexIngester:
                             if entry.strip():
                                 parts.append(entry)
                 else:
-                    # Fallback: flat text
-                    text = elem.get_text(" ", strip=True)
-                    if text:
-                        parts.append(text)
+                    # Layout B: direct column children
+                    col1 = elem.find("div", class_="grid-list-column-1", recursive=False)
+                    col2 = elem.find("div", class_="grid-list-column-2", recursive=False)
+                    if col1 and col2:
+                        label = col1.get_text(strip=True)
+                        # Direct text (p children) forms the item body
+                        text_parts: list[str] = []
+                        for child in col2.children:
+                            if not hasattr(child, "name") or child.name is None:
+                                t = str(child).strip()
+                                if t:
+                                    text_parts.append(t)
+                            elif child.name == "p":
+                                t = child.get_text(" ", strip=True)
+                                if t:
+                                    text_parts.append(t)
+                        if text_parts:
+                            parts.append(f"  {label} {' '.join(text_parts)}")
+                        elif label:
+                            parts.append(f"  {label}")
+                        # Recurse into div children of col2 for nested grid-lists
+                        for child in col2.children:
+                            if hasattr(child, "name") and child.name == "div":
+                                walk(child)
+                    else:
+                        text = elem.get_text(" ", strip=True)
+                        if text:
+                            parts.append(text)
                 return
 
             # Table: <table class="borderOj"> (layout table) or plain <table>
@@ -497,8 +573,21 @@ class EurLexIngester:
         Returns (ref_articles_csv, ref_external_csv).
         """
         # Internal: language-aware article keyword, e.g. "Article 92" / "Articolo 92"
+        # Exclude references to external regulations (e.g. "Article 10 of Regulation (EU)...")
         keyword = re.escape(self._lang_cfg.article_keyword)
-        art_nums: set[str] = set(re.findall(rf"{keyword}s?\s+(\d+[a-z]?)", text, re.I))
+        external_suffix = re.compile(
+            r"\s+(?:to\s+\d[\w]*\s+)?"
+            r"(?:of|del(?:la|lo|l')?|dello)\s+"
+            r"(?:Regulation|Directive|Decision|Delegated|Implementing"
+            r"|Regolamento|Direttiva|Decisione"
+            r"|Rozporządzenie|Dyrektywa|Decyzja)",
+            re.I,
+        )
+        art_nums: set[str] = set()
+        for m in re.finditer(rf"{keyword}s?\s+(\d+[a-z]?)", text, re.I):
+            after = text[m.end():]
+            if not external_suffix.match(after):
+                art_nums.add(m.group(1))
 
         # External: language-specific directive/regulation patterns
         ext_patterns = _EXTERNAL_REF_PATTERNS.get(self.language, _EXTERNAL_REF_PATTERNS["en"])

@@ -190,6 +190,45 @@ class TestCrossReferenceExtraction:
         assert arts == ""
         assert ext == ""
 
+    def test_external_article_ref_excluded_en(self):
+        """Article N of Regulation/Directive should NOT appear in referenced_articles."""
+        ing = ingester("en")
+        text = (
+            "in accordance with Articles 10 to 14 of Regulation (EU) No 1093/2010 "
+            "and Article 8 of Directive 2014/59/EU. See also Article 92."
+        )
+        arts, ext = ing._extract_cross_references(text)
+        assert "10" not in arts.split(",")
+        assert "14" not in arts.split(",")
+        assert "8" not in arts.split(",")
+        assert "92" in arts.split(",")
+
+    def test_external_article_ref_excluded_it(self):
+        """Italian: Articolo N del Regolamento should NOT appear in referenced_articles."""
+        ing = ingester("it")
+        text = (
+            "conformemente all'Articolo 4 del Regolamento (UE) n. 1093/2010 "
+            "e all'Articolo 92 del presente regolamento."
+        )
+        arts, ext = ing._extract_cross_references(text)
+        assert "4" not in arts.split(",")
+        # "Articolo 92 del presente regolamento" — "del presente" != "del Regolamento (UE)"
+        # so Article 92 should be kept as CRR-internal
+        assert "92" in arts.split(",")
+
+    def test_external_ref_delegated_implementing(self):
+        """Delegated/Implementing acts should also be excluded."""
+        ing = ingester("en")
+        text = (
+            "Article 3 of Delegated Regulation (EU) 2015/61 and "
+            "Article 5 of Implementing Regulation (EU) 2021/451 apply. "
+            "Article 395 shall also apply."
+        )
+        arts, ext = ing._extract_cross_references(text)
+        assert "3" not in arts.split(",")
+        assert "5" not in arts.split(",")
+        assert "395" in arts.split(",")
+
 
 # ---------------------------------------------------------------------------
 # Table and formula flags

@@ -375,3 +375,19 @@ Query "What are the requirements of Article 73?" still returns "insufficient con
 - Source relevance — ✅ (confirmed fine)
 - Citation order — ✅ (confirmed fine)
 - External regulation refs scoped — ✅ (frontend + backend metadata)
+
+---
+
+## 2026-03-15 — Codex review P1 fixes
+
+### Findings addressed
+
+| # | Finding | Fix |
+|---|---------|-----|
+| P1 | `get_article()` used `HYBRID` mode with exact metadata filter — silently returned zero results for articles that exist, breaking source-chip navigation | Switched to `DEFAULT` (dense-only), matching the fix already applied to `_direct_article_retrieve()` |
+| P1 | `frontend/public/` directory missing from repo — `docker build` COPY step failed on clean checkout | Added `frontend/public/.gitkeep` |
+| P2 | No committed example for `NEXT_PUBLIC_API_URL` — fresh checkout used wrong port (8000 vs 8080) for local dev | Added `frontend/.env.local.example` documenting `NEXT_PUBLIC_API_URL=http://localhost:8080` |
+
+### Remaining P2s (open in WORKLOG)
+- Document viewer only linkifies English article refs — Italian/Polish cross-references not clickable (covered by Italian parity audit item)
+- `launch.bat` port comment clarified via `.env.local.example`

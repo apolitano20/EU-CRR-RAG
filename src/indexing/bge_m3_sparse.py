@@ -22,8 +22,11 @@ def _get_model():
             if _model is None:
                 import torch
                 from FlagEmbedding import BGEM3FlagModel
-                device = "cuda" if torch.cuda.is_available() else "cpu"
-                _model = BGEM3FlagModel("BAAI/bge-m3", use_fp16=True, device=device)
+                _model = BGEM3FlagModel("BAAI/bge-m3", use_fp16=True)
+                # FlagEmbedding 1.x doesn't reliably honour a device= constructor
+                # arg — explicitly move to CUDA if available.
+                if torch.cuda.is_available():
+                    _model.model = _model.model.to("cuda")
     return _model
 
 

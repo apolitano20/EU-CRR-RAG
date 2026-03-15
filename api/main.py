@@ -137,6 +137,22 @@ class ArticleResponse(BaseModel):
     language: str
 
 
+class CitingArticleItem(BaseModel):
+    article: str
+    article_title: str
+    part: Optional[str] = None
+    title: Optional[str] = None
+    chapter: Optional[str] = None
+    section: Optional[str] = None
+    language: str
+
+
+class CitingArticlesResponse(BaseModel):
+    article: str
+    citing_articles: list[CitingArticleItem]
+    language: Optional[str] = None
+
+
 # ------------------------------------------------------------------
 # Language detection heuristic
 # ------------------------------------------------------------------
@@ -201,6 +217,22 @@ def get_article(article_id: str, language: Optional[str] = None) -> ArticleRespo
             detail=f"Article {article_id} not found.",
         )
     return ArticleResponse(**result)
+
+
+@app.get("/api/article/{article_id}/citing", response_model=CitingArticlesResponse)
+def get_citing_articles(article_id: str, language: Optional[str] = None) -> CitingArticlesResponse:
+    """Return all articles that reference the given article number."""
+    if not _query_engine.is_loaded():
+        raise HTTPException(
+            status_code=503,
+            detail="Index not loaded. Run ingestion first.",
+        )
+    results = _query_engine.get_citing_articles(article_id, language=language)
+    return CitingArticlesResponse(
+        article=article_id,
+        citing_articles=[CitingArticleItem(**r) for r in results],
+        language=language,
+    )
 
 
 @app.post("/api/ingest", response_model=IngestResponse)

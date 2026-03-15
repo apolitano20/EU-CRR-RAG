@@ -8,6 +8,17 @@ import type { ArticleResponse } from "@/lib/types";
 
 export default function AppLayout() {
   const [selectedArticle, setSelectedArticle] = useState<ArticleResponse | null>(null);
+  const [viewerError, setViewerError] = useState<string | null>(null);
+
+  const handleArticleSelect = (article: ArticleResponse) => {
+    setSelectedArticle(article);
+    setViewerError(null);
+  };
+
+  const handleArticleNotFound = (articleId: string) => {
+    setSelectedArticle(null);
+    setViewerError(`Article ${articleId} was not found in the CRR. It may have been deleted or does not exist.`);
+  };
 
   return (
     <div className="h-screen flex flex-col bg-slate-50">
@@ -24,7 +35,10 @@ export default function AppLayout() {
       <div className="flex-1 min-h-0">
         <PanelGroup direction="horizontal" className="h-full">
           <Panel defaultSize={42} minSize={25}>
-            <ChatPanel onArticleSelect={setSelectedArticle} />
+            <ChatPanel
+              onArticleSelect={handleArticleSelect}
+              onArticleNotFound={handleArticleNotFound}
+            />
           </Panel>
 
           <PanelResizeHandle className="w-px bg-slate-200 hover:bg-[#003399] hover:w-0.5 transition-all cursor-col-resize" />
@@ -32,7 +46,9 @@ export default function AppLayout() {
           <Panel defaultSize={58} minSize={30}>
             <DocumentViewer
               article={selectedArticle}
-              onArticleSelect={setSelectedArticle}
+              viewerError={viewerError}
+              onArticleSelect={handleArticleSelect}
+              onArticleNotFound={handleArticleNotFound}
             />
           </Panel>
         </PanelGroup>

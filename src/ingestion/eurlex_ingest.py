@@ -187,13 +187,23 @@ class EurLexIngester:
         parent_id = parent.get("id", "") if parent and hasattr(parent, "get") else ""
         hierarchy = _extract_hierarchy(parent_id)
 
-        # Article title from eli-title > stitle-article-norm
+        # Article title from eli-title > stitle-article-norm.
+        # Fallback: any <p> inside eli-title that is not title-article-norm (which
+        # contains "Article N" — the number heading, not the descriptive title).
         article_title = ""
         eli_title = art_div.find("div", class_="eli-title")
         if eli_title:
             stitle = eli_title.find("p", class_="stitle-article-norm")
             if stitle:
                 article_title = stitle.get_text(" ", strip=True)
+            else:
+                # Fallback: first <p> that isn't the article-number heading
+                for p in eli_title.find_all("p"):
+                    if "title-article-norm" not in (p.get("class") or []):
+                        candidate = p.get_text(" ", strip=True)
+                        if candidate:
+                            article_title = candidate
+                            break
 
         formula_images: list[str] = []
         text = self._extract_structured_text(art_div, formula_images=formula_images)

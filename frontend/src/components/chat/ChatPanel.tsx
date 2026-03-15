@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { useQuery } from "@/hooks/useQuery";
 import QuestionInput from "./QuestionInput";
 import AnswerCard from "./AnswerCard";
-import { getArticle } from "@/lib/api";
+import { getArticle, ArticleNotFoundError } from "@/lib/api";
 import type { ArticleResponse, QueryResponse } from "@/lib/types";
 
 interface Message {
@@ -14,9 +14,10 @@ interface Message {
 
 interface ChatPanelProps {
   onArticleSelect: (article: ArticleResponse) => void;
+  onArticleNotFound: (articleId: string) => void;
 }
 
-export default function ChatPanel({ onArticleSelect }: ChatPanelProps) {
+export default function ChatPanel({ onArticleSelect, onArticleNotFound }: ChatPanelProps) {
   const { isLoading, error, submitQuery } = useQuery();
   const [messages, setMessages] = useState<Message[]>([]);
   const [pendingQuestion, setPendingQuestion] = useState("");
@@ -40,7 +41,11 @@ export default function ChatPanel({ onArticleSelect }: ChatPanelProps) {
       const article = await getArticle(articleId, language);
       onArticleSelect(article);
     } catch (err) {
-      console.error("Failed to load article:", err);
+      if (err instanceof ArticleNotFoundError) {
+        onArticleNotFound(err.articleId);
+      } else {
+        console.error("Failed to load article:", err);
+      }
     }
   };
 

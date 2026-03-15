@@ -371,6 +371,67 @@ class TestGridListParsing:
 
 
 # ---------------------------------------------------------------------------
+# Amendment block handling (regression for Article 94 duplicate paragraphs)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestAmendmentBlockParsing:
+    """Parser must not duplicate content around EUR-Lex <p class='modref'> markers.
+
+    EUR-Lex consolidated HTML places amendment markers (<p class="modref">) inside
+    article content to indicate where insertions or replacements begin/end.
+    Two consecutive ▼M17 blocks (REPLACED then INSERTED) appear back-to-back in
+    some articles (e.g. Article 94), which historically caused the parser to emit
+    the content between them twice.
+    """
+
+    def test_no_duplicate_paragraphs_with_amendment_markers(
+        self, eurlex_html_with_amendment_blocks
+    ):
+        """Each paragraph/point should appear exactly once in the output text."""
+        docs = ingester("en")._parse_with_beautifulsoup(eurlex_html_with_amendment_blocks)
+        assert len(docs) == 1, f"Expected 1 document, got {len(docs)}"
+        text = docs[0].text
+
+        # Sub-paragraphs that sit between the two ▼M17 blocks — these were duplicated
+        # in the Article 94 regression.
+        first_subpara = "long position is one where"
+        second_subpara = "aggregated long position shall be equal"
+
+        assert text.count(first_subpara) == 1, (
+            f"'{first_subpara}' appears {text.count(first_subpara)} times (expected 1)"
+        )
+        assert text.count(second_subpara) == 1, (
+            f"'{second_subpara}' appears {text.count(second_subpara)} times (expected 1)"
+        )
+
+    def test_amendment_marker_text_stripped(self, eurlex_html_with_amendment_blocks):
+        """▼M17 / ▼M8 marker symbols must not appear in the output."""
+        docs = ingester("en")._parse_with_beautifulsoup(eurlex_html_with_amendment_blocks)
+        text = docs[0].text
+        assert "▼M17" not in text
+        assert "▼M8" not in text
+        assert "►M17" not in text
+
+    def test_paragraph_4_not_duplicated(self, eurlex_html_with_amendment_blocks):
+        """Paragraph 4 (which follows the ▼M8 marker) should appear exactly once."""
+        docs = ingester("en")._parse_with_beautifulsoup(eurlex_html_with_amendment_blocks)
+        text = docs[0].text
+        para4_text = "Article 102 shall not apply"
+        assert text.count(para4_text) == 1, (
+            f"Paragraph 4 content appears {text.count(para4_text)} times (expected 1)"
+        )
+
+    def test_article_3_points_all_present(self, eurlex_html_with_amendment_blocks):
+        """All three lettered points (a), (b), (c) of para 3 must be in the output."""
+        docs = ingester("en")._parse_with_beautifulsoup(eurlex_html_with_amendment_blocks)
+        text = docs[0].text
+        assert "all positions assigned to the trading book" in text
+        assert "valued at their market value" in text
+        assert "absolute value of the aggregated long position" in text
+
+
+# ---------------------------------------------------------------------------
 # _download_html with local file
 # ---------------------------------------------------------------------------
 

@@ -412,3 +412,58 @@ Query "What are the requirements of Article 73?" still returns "insufficient con
 ### Remaining P2s (open in WORKLOG)
 - Document viewer only linkifies English article refs — Italian/Polish cross-references not clickable (covered by Italian parity audit item)
 - `launch.bat` port comment clarified via `.env.local.example`
+
+---
+
+## 2026-03-15 — Reverse reference lookup + article title precision investigation
+
+### Reverse reference lookup (`GET /api/article/{id}/citing`)
+
+New query-time capability: "which articles cite Article 92?" — implemented with no re-ingest.
+
+| File | Change |
+|------|--------|
+| `src/indexing/vector_store.py` | Added `scroll_payloads(language)` — Qdrant native scroll with optional language filter; returns all document payloads without vectors |
+| `src/query/query_engine.py` | Added `get_citing_articles(article_num, language)` — calls `scroll_payloads()`, post-filters in Python to ensure exact CSV token match (prevents "92" matching "192"/"292"), returns sorted list of citing article dicts |
+| `api/main.py` | Added `CitingArticleItem` + `CitingArticlesResponse` Pydantic models; new `GET /api/article/{article_id}/citing?language=en` endpoint |
+
+**Design notes:**
+- Used Qdrant scroll (not LlamaIndex filter abstraction) to avoid `CONTAINS` operator limitations for CSV substring matching
+- Python post-filter splits `referenced_articles` CSV and checks exact set membership — no false positives
+- Results sorted by article number (numeric); articles with letter suffixes (e.g. "92a") sort after their base number
+
+### Article title precision (investigation complete)
+
+**Finding**: `article_title` in metadata is parsed directly from the `stitle-article-norm` CSS class inside `eli-title` in EUR-Lex HTML — **not LLM-synthesized**. Any title variation reflects the EUR-Lex source.
+
+**Fix**: Added fallback in `_process_article_div()` — if `stitle-article-norm` is absent, the ingester now tries the first `<p>` in `eli-title` that is not `title-article-norm` (the article-number heading). Takes effect on next re-ingest.
+
+---
+
+## 2026-03-15 — Article 94 duplicate paragraphs: root cause fixed
+
+### Bug
+Article 94 in the document viewer showed paragraphs 4–6 twice and paragraph 7 as a bare "7." label with no body text.
+
+### Root cause
+LlamaIndex `VectorStoreIndex.from_documents()` split Article 94 into **2 overlapping Qdrant nodes** despite `transformations=[]` being set. The article (~1 200 tokens) exceeded the default `Settings.chunk_size = 1024`, which some internal LlamaIndex paths still consult independently of the transformations list. `get_article()` retrieved both chunks and concatenated them verbatim, producing the duplicate.
+
+Diagnostic: `VectorStore.scroll_payloads()` revealed **117 articles** with >1 node in the current EN collection (948 total nodes vs expected 745), confirming this is a stale-data issue from a previous ingest before the `chunk_size` guard was in place. Notable duplicates: Article 4 (23 nodes), Annex IV (31 nodes), Article 473a (7 nodes).
+
+The BeautifulSoup parser itself is clean — running `_extract_structured_text()` directly on `crr_raw_en.html` produces correct, non-duplicate output.
+
+### Fixes applied
+
+| File | Change |
+|------|--------|
+| `src/indexing/index_builder.py` | `_configure_settings()` now sets `Settings.chunk_size = 8192` and `Settings.chunk_overlap = 0` — explicit guard so no article can be chunked regardless of other LlamaIndex settings |
+| `src/query/query_engine.py` | `get_article()` deduplicates retrieved nodes by LlamaIndex internal `node_id` before concatenating (safeguard against the same Qdrant record returned twice) |
+| `tests/conftest.py` | Added `eurlex_html_with_amendment_blocks` fixture — reproduces Article 94's `<p class="modref">` amendment marker structure |
+| `tests/unit/test_eurlex_ingest.py` | Added `TestAmendmentBlockParsing` (4 regression tests): no duplicate paragraphs, amendment markers stripped, para 4 not duplicated, all points present |
+| `tests/unit/test_query_engine_unit.py` | Added `test_get_article_deduplicates_by_internal_node_id` |
+
+### Test results
+182/182 unit tests pass.
+
+### Action required
+Run `python -m src.pipelines.ingest_pipeline --reset` (or the Colab notebook) to rebuild the Qdrant collection cleanly. All 117 affected articles will be fixed after re-ingest.

@@ -71,3 +71,8 @@ class HierarchicalIndexer:
     def _configure_settings(self) -> None:
         Settings.embed_model = BGEm3Embedding()
         Settings.llm = None  # LLM is set per-query in QueryEngine
+        # Prevent LlamaIndex from chunking article-level documents.
+        # transformations=[] in build() handles new ingests, but Settings
+        # chunk_size/overlap are also consulted by some LlamaIndex code paths.
+        Settings.chunk_size = 8192
+        Settings.chunk_overlap = 0

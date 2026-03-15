@@ -389,6 +389,19 @@ class QueryEngine:
         if not nodes:
             return None
 
+        # Deduplicate by LlamaIndex internal node_id (guards against the same
+        # Qdrant record being returned twice when HYBRID and DEFAULT modes both
+        # match, or when the collection contains duplicate points from a
+        # previous ingest without --reset).
+        seen_ids: set[str] = set()
+        unique_nodes = []
+        for node in nodes:
+            nid = node.node.node_id
+            if nid not in seen_ids:
+                seen_ids.add(nid)
+                unique_nodes.append(node)
+        nodes = unique_nodes
+
         full_text = "\n\n".join(
             node.node.get_content()
             for node in nodes
@@ -410,6 +423,58 @@ class QueryEngine:
             "referenced_articles": referenced_articles,
             "language": meta.get("language") or language or "en",
         }
+
+    def get_citing_articles(
+        self, article_num: str, language: Optional[str] = None
+    ) -> list[dict]:
+        """Return articles that reference the given article number.
+
+        Scans all document payloads and returns those whose referenced_articles
+        CSV field contains article_num as an exact token (not a substring), so
+        "92" does not match "192" or "920".
+
+        Args:
+            article_num: Article number to look up (e.g. "92").
+            language: Optional ISO language code to restrict results.
+
+        Returns:
+            List of citing article dicts sorted by article number, or empty list
+            if the index is not loaded.
+        """
+        if self._vector_index is None:
+            return []
+
+        payloads = self.vector_store.scroll_payloads(language=language)
+
+        results: list[dict] = []
+        seen: set[str] = set()
+        for payload in payloads:
+            csv = payload.get("referenced_articles", "")
+            if not csv:
+                continue
+            tokens = {t.strip() for t in csv.split(",") if t.strip()}
+            if article_num not in tokens:
+                continue
+            citing_art = payload.get("article", "")
+            if not citing_art or citing_art in seen:
+                continue
+            seen.add(citing_art)
+            results.append({
+                "article": citing_art,
+                "article_title": payload.get("article_title", ""),
+                "part": payload.get("part") or None,
+                "title": payload.get("title") or None,
+                "chapter": payload.get("chapter") or None,
+                "section": payload.get("section") or None,
+                "language": payload.get("language") or language or "en",
+            })
+
+        results.sort(key=lambda x: int(re.sub(r"[^0-9]", "", x["article"]) or "0"))
+        logger.info(
+            "Reverse reference lookup: Article %s cited by %d articles (language=%s)",
+            article_num, len(results), language,
+        )
+        return results
 
     def _direct_article_retrieve(
         self, article_num: str, query_str: str, language: Optional[str]

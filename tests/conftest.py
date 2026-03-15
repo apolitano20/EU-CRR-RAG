@@ -257,6 +257,59 @@ def eurlex_html_cross_refs() -> str:
     ])
 
 
+@pytest.fixture
+def eurlex_html_with_amendment_blocks() -> str:
+    """HTML mimicking EUR-Lex amendment markers (<p class='modref'>) inside an article.
+
+    Reproduces the Article 94 structure that triggered duplicate-paragraph output:
+    - Paragraph 3 body contains a <p class="modref"> (▼M17) between point (b) and (c).
+    - Two consecutive <p class="norm"> sub-paragraphs appear AFTER paragraph 3, directly
+      inside the article div (not wrapped in a numbered <div class="norm">).
+    - A second <p class="modref"> (▼M8) separates these sub-paragraphs from paragraph 4.
+
+    Expected: the parser emits each text element exactly once, with no duplicates.
+    """
+    return textwrap.dedent("""\
+        <!DOCTYPE html><html><body>
+        <div id="prt_THREE.tis_I.cpt_1.sct_1">
+          <div id="art_94">
+            <p class="title-article-norm">Article 94</p>
+            <div class="eli-title">
+              <p class="stitle-article-norm">Derogation for small trading book business</p>
+            </div>
+            <div class="norm">
+              <span class="no-parag">3.  </span>
+              <div class="norm inline-element">
+                <p class="norm inline-element">Institutions shall calculate the size in accordance with the following requirements:</p>
+                <div class="grid-container grid-list">
+                  <div class="list grid-list-column-1"><span>(a) </span></div>
+                  <div class="grid-list-column-2"><p class="norm">all positions assigned to the trading book;</p></div>
+                </div>
+                <div class="grid-container grid-list">
+                  <div class="list grid-list-column-1"><span>(b) </span></div>
+                  <div class="grid-list-column-2"><p class="norm">all positions shall be valued at their market value;</p></div>
+                </div>
+                <p class="modref"><a title="M17: REPLACED">▼M17</a></p>
+                <div class="grid-container grid-list">
+                  <div class="list grid-list-column-1"><span>(c) </span></div>
+                  <div class="grid-list-column-2"><p class="norm">the absolute value of the aggregated long position shall be summed.</p></div>
+                </div>
+              </div>
+            </div>
+            <p class="modref"><a title="M17: INSERTED">▼M17</a></p>
+            <p class="norm">For the purposes of the first subparagraph, a long position is one where the market value increases.</p>
+            <p class="norm">For the purposes of the first subparagraph, the value of the aggregated long position shall be equal to the sum.</p>
+            <p class="modref"><a title="M8: REPLACED">▼M8</a></p>
+            <div class="norm">
+              <span class="no-parag">4.  </span>
+              <div class="norm inline-element">Where both conditions are met, Article 102 shall not apply.</div>
+            </div>
+          </div>
+        </div>
+        </body></html>
+    """)
+
+
 # ---------------------------------------------------------------------------
 # Paths to real HTML files (may not exist on CI)
 # ---------------------------------------------------------------------------

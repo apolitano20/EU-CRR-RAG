@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { getArticle } from "@/lib/api";
+import { getArticle, ArticleNotFoundError } from "@/lib/api";
 import type { ArticleResponse } from "@/lib/types";
 import DocumentBreadcrumb from "./DocumentBreadcrumb";
 import ProvisionHeader from "./ProvisionHeader";
@@ -9,10 +9,12 @@ import ProvisionText from "./ProvisionText";
 
 interface DocumentViewerProps {
   article: ArticleResponse | null;
+  viewerError: string | null;
   onArticleSelect: (article: ArticleResponse) => void;
+  onArticleNotFound: (articleId: string) => void;
 }
 
-export default function DocumentViewer({ article, onArticleSelect }: DocumentViewerProps) {
+export default function DocumentViewer({ article, viewerError, onArticleSelect, onArticleNotFound }: DocumentViewerProps) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
@@ -31,11 +33,24 @@ export default function DocumentViewer({ article, onArticleSelect }: DocumentVie
       const data = await getArticle(articleId, article?.language);
       onArticleSelect(data);
     } catch (err) {
-      console.error("Failed to navigate to article:", err);
+      if (err instanceof ArticleNotFoundError) {
+        onArticleNotFound(err.articleId);
+      } else {
+        console.error("Failed to navigate to article:", err);
+      }
     }
   };
 
   if (!article) {
+    if (viewerError) {
+      return (
+        <div className="h-full flex flex-col items-center justify-center bg-slate-50 text-center select-none px-8">
+          <div className="text-4xl mb-3">🔍</div>
+          <p className="text-sm font-medium text-slate-600">Article not found</p>
+          <p className="text-xs mt-2 text-slate-400 max-w-xs leading-relaxed">{viewerError}</p>
+        </div>
+      );
+    }
     return (
       <div className="h-full flex flex-col items-center justify-center bg-slate-50 text-center select-none">
         <div className="text-4xl mb-3">📄</div>

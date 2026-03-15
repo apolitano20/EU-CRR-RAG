@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Optional
 
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import (
@@ -116,6 +117,42 @@ class VectorStore:
                     )
                 },
             )
+
+    def scroll_payloads(self, language: Optional[str] = None) -> list[dict]:
+        """Return all document payloads (no vectors) from the collection.
+
+        Uses Qdrant's scroll API for an efficient full-collection scan.
+        Optionally filters by language using the keyword payload index.
+        """
+        from qdrant_client.http.models import FieldCondition, Filter, MatchValue
+
+        if self._client is None:
+            self.connect()
+
+        scroll_filter = None
+        if language:
+            scroll_filter = Filter(
+                must=[FieldCondition(key="language", match=MatchValue(value=language))]
+            )
+
+        all_payloads: list[dict] = []
+        offset = None
+        while True:
+            records, offset = self._client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=scroll_filter,
+                with_payload=True,
+                with_vectors=False,
+                limit=200,
+                offset=offset,
+            )
+            for r in records:
+                if r.payload:
+                    all_payloads.append(r.payload)
+            if offset is None:
+                break
+
+        return all_payloads
 
     def _ensure_payload_indexes(self) -> None:
         """Create keyword payload indexes required for metadata filtering.

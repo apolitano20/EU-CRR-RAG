@@ -194,6 +194,42 @@ class TestSynthesisNodeMerging:
         assert len(nodes_passed) == 1
         assert nodes_passed[0].node.node_id == "art_92_en"
 
+    def test_get_article_deduplicates_by_internal_node_id(self):
+        """get_article() must not concatenate the same Qdrant record twice.
+
+        LlamaIndex may return the same node twice when both HYBRID and DEFAULT
+        retrieval modes are tried, or if a collection has duplicate Qdrant points
+        left over from a previous ingest without --reset.  Both scenarios produce
+        duplicate text in the returned article body.
+        """
+        from src.query.query_engine import QueryEngine
+        from src.indexing.vector_store import VectorStore
+        from src.indexing.index_builder import HierarchicalIndexer
+
+        qe = QueryEngine.__new__(QueryEngine)
+        qe.vector_store = MagicMock(spec=VectorStore)
+        qe.indexer = MagicMock(spec=HierarchicalIndexer)
+        qe._vector_index = MagicMock()
+
+        # Two nodes with the SAME internal node_id (same Qdrant record returned twice)
+        node_a = _make_node("uuid-abc-123", article="94")
+        node_a.node.get_content.return_value = "1. Paragraph one. 2. Paragraph two."
+        node_b = _make_node("uuid-abc-123", article="94")  # same UUID
+        node_b.node.metadata = {"article": "94", "language": "en",
+                                "article_title": "", "part": "III",
+                                "title": "I", "chapter": "1", "section": "1",
+                                "referenced_articles": ""}
+        node_b.node.get_content.return_value = "1. Paragraph one. 2. Paragraph two."
+
+        qe._retrieve_with_filters = MagicMock(return_value=[node_a, node_b])
+
+        result = qe.get_article("94", language="en")
+        assert result is not None
+        # Full text must contain paragraph content exactly once, not duplicated
+        assert result["text"].count("Paragraph one") == 1, (
+            "Duplicate node with same node_id should be deduplicated"
+        )
+
     def test_expanded_sources_flagged_correctly(self):
         """Sources list: primary nodes have expanded=False, expansion nodes expanded=True."""
         qe = self._build_query_engine()

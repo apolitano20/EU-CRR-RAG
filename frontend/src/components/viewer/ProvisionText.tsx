@@ -14,8 +14,8 @@ const GRID_ITEM_RE = /^\s*\([a-z]+\)\s/i;
 // Roman numeral sub-items: "(i) text", "(ii) text" — deeper nesting
 const ROMAN_ITEM_RE = /^\s*\((?:i{1,3}|iv|vi{0,3})\)\s/i;
 
-// Numbered paragraphs: "1. text", "2. text"
-const NUMBERED_PARA_RE = /^\d+\.\s+/;
+// Numbered paragraphs: "1. text", "2. text", or bare label "7." on its own line
+const NUMBERED_PARA_RE = /^\d+\.(\s|$)/;
 
 // Split inline list items like "(a) ...; (b) ...; (i) ..." onto separate lines.
 // Only matches single letters (a)-(z) or short roman numerals (i)-(viii) preceded
@@ -110,15 +110,15 @@ export default function ProvisionText({ text, onArticleRef }: ProvisionTextProps
                 );
               }
 
-              // Numbered paragraph — "1. text", "2. text"
+              // Numbered paragraph — "1. text", "2. text", or bare "7." label
               if (NUMBERED_PARA_RE.test(trimmed)) {
-                const numEnd = trimmed.indexOf(" ");
-                const numLabel = trimmed.slice(0, numEnd);
-                const body = trimmed.slice(numEnd + 1);
+                const spaceIdx = trimmed.indexOf(" ");
+                const numLabel = spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx);
+                const body = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1);
                 return (
                   <p key={li}>
                     <span className="font-semibold text-slate-800 mr-1.5">{numLabel}</span>
-                    {parseRefs(body, onArticleRef)}
+                    {body ? parseRefs(body, onArticleRef) : null}
                   </p>
                 );
               }

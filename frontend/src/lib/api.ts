@@ -2,6 +2,12 @@ import type { ArticleResponse, QueryResponse } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+export class ArticleNotFoundError extends Error {
+  constructor(public articleId: string) {
+    super(`Article ${articleId} not found in the CRR index`);
+  }
+}
+
 export async function postQuery(
   query: string,
   language?: string
@@ -21,7 +27,7 @@ export async function getArticle(
 ): Promise<ArticleResponse> {
   const params = language ? `?language=${encodeURIComponent(language)}` : "";
   const res = await fetch(`${API_BASE}/api/article/${encodeURIComponent(articleId)}${params}`);
-  if (!res.ok)
-    throw new Error(`Article fetch failed: ${res.status} ${res.statusText}`);
+  if (res.status === 404) throw new ArticleNotFoundError(articleId);
+  if (!res.ok) throw new Error(`Article fetch failed: ${res.status} ${res.statusText}`);
   return res.json();
 }

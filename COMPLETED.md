@@ -378,6 +378,27 @@ Query "What are the requirements of Article 73?" still returns "insufficient con
 
 ---
 
+## 2026-03-15 — Codex review: QueryEngine correctness + embedding consolidation
+
+### Findings addressed (from Codex targeted review)
+
+| # | Finding | Severity | Fix |
+|---|---------|----------|-----|
+| 1 | **Expanded nodes excluded from LLM synthesis** — `_expand_cross_references()` results were appended to `sources` (UI only) but never passed to `engine.synthesize()`; the LLM had no visibility into referenced articles | High | Merged `deduped_expanded` into `all_nodes_for_synthesis`; dedup by `node_id` prevents double-context; synthesis now called with `source_nodes + deduped_expanded` |
+| 2 | **`Settings.callback_manager` thread-unsafe global mutation** — `query()` overwrote the module-level `Settings` singleton per request; in practice the token counter was also disconnected from already-constructed engine/synthesizer objects (LlamaIndex captures callbacks at construction) | High | Removed `TokenCountingHandler` and `CallbackManager` mutation entirely; updated log format accordingly |
+| 3 | **DEFAULT vs HYBRID inconsistency** — `_direct_article_retrieve()` and `get_article()` used hard-coded `DEFAULT`; `_expand_cross_references()` used hard-coded `HYBRID` — three methods, two contradictory rules | Medium | Introduced `_retrieve_with_filters()` helper: tries `HYBRID` first, falls back to `DEFAULT` on empty result or exception; all three methods now use this single path |
+| 4 | **Embedding backend inconsistency** — `HierarchicalIndexer._configure_settings()` used `HuggingFaceEmbedding(bge-m3)` (sentence-transformers backend) while query path used `BGEm3Embedding` (FlagEmbedding backend); one BGE-M3 singleton, two wrappers | Low | `index_builder.py` now imports and uses `BGEm3Embedding` directly; `embed_model_name` constructor parameter removed; both indexing and querying use the same class and singleton |
+
+### Files changed
+- `src/query/query_engine.py` — removed `CallbackManager`/`TokenCountingHandler` imports and usage; synthesis now over `all_nodes_for_synthesis`; `_retrieve_with_filters()` helper added; `_direct_article_retrieve()`, `get_article()`, `_expand_cross_references()` updated
+- `src/indexing/index_builder.py` — replaced `HuggingFaceEmbedding` with `BGEm3Embedding`; removed `embed_model_name` parameter
+- `tests/unit/test_query_engine_unit.py` — **NEW** — 8 unit tests: `_retrieve_with_filters` HYBRID→DEFAULT fallback, exception fallback, short-circuit on HYBRID success; synthesis includes expanded nodes, deduplication, `expanded` flag in sources
+
+### Test results
+177/177 unit tests pass.
+
+---
+
 ## 2026-03-15 — Codex review P1 fixes
 
 ### Findings addressed

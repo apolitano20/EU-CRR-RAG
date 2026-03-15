@@ -9,8 +9,8 @@ import logging
 from typing import Optional
 
 from llama_index.core import Document, Settings, StorageContext, VectorStoreIndex
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 
+from src.indexing.bge_m3_sparse import BGEm3Embedding
 from src.indexing.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -22,11 +22,9 @@ class HierarchicalIndexer:
     def __init__(
         self,
         vector_store: VectorStore,
-        embed_model_name: str = "BAAI/bge-m3",
         reset_store: bool = False,
     ) -> None:
         self.vector_store = vector_store
-        self.embed_model_name = embed_model_name
         self.reset_store = reset_store
         self._vector_index: Optional[VectorStoreIndex] = None
 
@@ -71,5 +69,5 @@ class HierarchicalIndexer:
     # ------------------------------------------------------------------
 
     def _configure_settings(self) -> None:
-        Settings.embed_model = HuggingFaceEmbedding(model_name=self.embed_model_name)
+        Settings.embed_model = BGEm3Embedding()
         Settings.llm = None  # LLM is set per-query in QueryEngine

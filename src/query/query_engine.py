@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from llama_index.core import Settings, VectorStoreIndex
-from llama_index.core.callbacks import CallbackManager, TokenCountingHandler
 from llama_index.core.postprocessor import SimilarityPostprocessor
 from llama_index.core.prompts import PromptTemplate
 from llama_index.core.query_engine import RetrieverQueryEngine
@@ -151,7 +150,6 @@ class QueryEngine:
         self._vector_index: Optional[VectorStoreIndex] = None
         self._engine_cache: dict[str, RetrieverQueryEngine] = {}
         self._engine_cache_lock = threading.Lock()
-        self._token_counter: Optional[TokenCountingHandler] = None
         self._reranker = None
 
     # ------------------------------------------------------------------
@@ -209,10 +207,6 @@ class QueryEngine:
         else:
             engine = self._engine
 
-        # Per-request token counter (avoids mixing counts across concurrent requests)
-        token_counter = TokenCountingHandler(verbose=False)
-        Settings.callback_manager = CallbackManager([token_counter])
-
         query_bundle = QueryBundle(query_str=user_query)
 
         # Stage 1: Retrieval (includes postprocessors: similarity cutoff + reranker if enabled)
@@ -238,9 +232,15 @@ class QueryEngine:
         expanded_nodes = self._expand_cross_references(source_nodes, language=language, limit=expansions)
         t_expand_ms = round((time.perf_counter() - t_exp) * 1000)
 
-        # Stage 3: LLM synthesis
+        # Deduplicate expanded nodes against primary results so the LLM doesn't
+        # see the same article twice, then merge for synthesis.
+        source_ids = {node.node.node_id for node in source_nodes}
+        deduped_expanded = [n for n in expanded_nodes if n.node.node_id not in source_ids]
+        all_nodes_for_synthesis = source_nodes + deduped_expanded
+
+        # Stage 3: LLM synthesis over primary + expanded context
         t_syn = time.perf_counter()
-        response = engine.synthesize(query_bundle, source_nodes)
+        response = engine.synthesize(query_bundle, all_nodes_for_synthesis)
         t_synthesis_ms = round((time.perf_counter() - t_syn) * 1000)
 
         sources = [
@@ -259,28 +259,24 @@ class QueryEngine:
                 "metadata": node.node.metadata,
                 "expanded": True,
             }
-            for node in expanded_nodes
+            for node in deduped_expanded
         ]
 
         latency_ms = round((time.perf_counter() - t0) * 1000)
-        prompt_tokens = token_counter.prompt_llm_token_count
-        completion_tokens = token_counter.completion_llm_token_count
 
         logger.info(
-            "[%s] Retrieved %d source nodes + %d expanded; "
+            "[%s] Retrieved %d source nodes + %d expanded (%d synthesized); "
             "answer=%d chars; latency=%dms "
-            "(retrieval=%dms, expansion=%dms, synthesis=%dms); "
-            "tokens=prompt:%d,completion:%d",
+            "(retrieval=%dms, expansion=%dms, synthesis=%dms)",
             trace_id,
             len(source_nodes),
-            len(expanded_nodes),
+            len(deduped_expanded),
+            len(all_nodes_for_synthesis),
             len(str(response)),
             latency_ms,
             t_retrieval_ms,
             t_expand_ms,
             t_synthesis_ms,
-            prompt_tokens,
-            completion_tokens,
         )
 
         return QueryResult(answer=str(response), sources=sources, trace_id=trace_id)
@@ -333,12 +329,11 @@ class QueryEngine:
                     filters_list.append(
                         MetadataFilter(key="language", value=language, operator=FilterOperator.EQ)
                     )
-                retriever = self._vector_index.as_retriever(
-                    similarity_top_k=1,
-                    vector_store_query_mode=VectorStoreQueryMode.HYBRID,
+                results = self._retrieve_with_filters(
                     filters=MetadataFilters(filters=filters_list),
+                    query_str=f"Article {ref_art}",
+                    top_k=1,
                 )
-                results = retriever.retrieve(f"Article {ref_art}")
                 expanded.extend(results)
                 _seen.add(ref_art)
             except Exception as exc:
@@ -385,14 +380,11 @@ class QueryEngine:
                 MetadataFilter(key="language", value=language, operator=FilterOperator.EQ)
             )
 
-        # Use DEFAULT (dense-only) — HYBRID with exact metadata filters returns zero
-        # results for selective filters (same issue fixed in _direct_article_retrieve).
-        retriever = self._vector_index.as_retriever(
-            similarity_top_k=20,
-            vector_store_query_mode=VectorStoreQueryMode.DEFAULT,
+        nodes = self._retrieve_with_filters(
             filters=MetadataFilters(filters=filters_list),
+            query_str=f"Article {article_num}",
+            top_k=20,
         )
-        nodes = retriever.retrieve(f"Article {article_num}")
 
         if not nodes:
             return None
@@ -422,11 +414,7 @@ class QueryEngine:
     def _direct_article_retrieve(
         self, article_num: str, query_str: str, language: Optional[str]
     ) -> list:
-        """Metadata-filtered retrieval for a specific article number, bypassing vector ranking.
-
-        Uses DEFAULT (dense-only) mode because we have an exact metadata filter — hybrid
-        sparse retrieval can return zero results when the filter is very selective.
-        """
+        """Metadata-filtered retrieval for a specific article number, bypassing vector ranking."""
         filters_list = [
             MetadataFilter(key="article", value=article_num, operator=FilterOperator.EQ),
         ]
@@ -434,16 +422,50 @@ class QueryEngine:
             filters_list.append(
                 MetadataFilter(key="language", value=language, operator=FilterOperator.EQ)
             )
-        retriever = self._vector_index.as_retriever(
-            similarity_top_k=10,
-            vector_store_query_mode=VectorStoreQueryMode.DEFAULT,
+        return self._retrieve_with_filters(
             filters=MetadataFilters(filters=filters_list),
+            query_str=query_str,
+            top_k=10,
         )
-        return retriever.retrieve(query_str)
 
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
+
+    def _retrieve_with_filters(
+        self,
+        filters: MetadataFilters,
+        query_str: str,
+        top_k: int,
+    ) -> list:
+        """Retrieve nodes with metadata filters, trying HYBRID first then DEFAULT.
+
+        Qdrant HYBRID mode can return empty results when a metadata filter is
+        highly selective (e.g. exact article match) because the sparse ANN index
+        finds no approximate neighbours under tight constraints.  Falling back to
+        DEFAULT (dense-only) applies the filter as a post-filter and reliably
+        returns the expected nodes.
+
+        Using HYBRID as the first attempt means queries that do work in HYBRID
+        mode (e.g. cross-reference expansion with looser filters) benefit from
+        sparse recall without any code changes.
+        """
+        for mode in (VectorStoreQueryMode.HYBRID, VectorStoreQueryMode.DEFAULT):
+            try:
+                retriever = self._vector_index.as_retriever(
+                    similarity_top_k=top_k,
+                    vector_store_query_mode=mode,
+                    filters=filters,
+                )
+                results = retriever.retrieve(query_str)
+            except Exception as exc:
+                logger.warning(
+                    "Retrieval mode=%s failed (%s) — trying fallback", mode, exc
+                )
+                results = []
+            if results:
+                return results
+        return []
 
     def _configure_settings(self) -> None:
         Settings.embed_model = BGEm3Embedding()

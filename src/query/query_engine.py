@@ -385,9 +385,11 @@ class QueryEngine:
                 MetadataFilter(key="language", value=language, operator=FilterOperator.EQ)
             )
 
+        # Use DEFAULT (dense-only) — HYBRID with exact metadata filters returns zero
+        # results for selective filters (same issue fixed in _direct_article_retrieve).
         retriever = self._vector_index.as_retriever(
             similarity_top_k=20,
-            vector_store_query_mode=VectorStoreQueryMode.HYBRID,
+            vector_store_query_mode=VectorStoreQueryMode.DEFAULT,
             filters=MetadataFilters(filters=filters_list),
         )
         nodes = retriever.retrieve(f"Article {article_num}")

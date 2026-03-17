@@ -10,8 +10,6 @@ Qdrant collection rebuilt clean on 2026-03-18 via Colab T4 (re-ingest with `--re
 Smoke test passed — Article 92 query returns correct answer with proper citations.
 Git consolidated to single `main` branch (deleted local + remote `master`).
 
-All Codex V2 ingestion + query bugs resolved (8 findings, all closed). See `COMPLETED.md` for details.
-
 ---
 
 ## Minimum Checklist Scorecard
@@ -46,14 +44,8 @@ Known design constraints to revisit as the project matures.
 | 2 | **Language detection heuristic** | `_detect_language()` uses character-set diacritics only. Italian diacritics overlap with French, Romanian, Portuguese — English queries always return `None`. | Replace with `langdetect`/`lingua-py` if additional Romance languages are added. |
 | 3 | **BGEm3Embedding on Windows (indexer)** | Prior SIGSEGV traced to simultaneous reranker + BGE-M3 loading; reranker not loaded during ingestion so risk is low. Ingestion is currently Colab-only. | Test on Windows before enabling local ingestion. |
 | 4 | **`--reset` drops all languages** | `ingest_pipeline --reset` wipes the entire Qdrant collection including all languages. No per-language reset. | Tracked in backlog as `--language-only-reset`. |
-| 5 | **Single-article direct lookup only** | `_detect_direct_article_lookup()` routes to metadata-filtered retrieval only when exactly one article is mentioned. Multi-article queries may miss one article if cosine scores are unbalanced. | Partially addressed by Codex V2 finding #5 (see Medium Priority). |
+| 5 | **Single-article direct lookup only** | `_detect_direct_article_lookup()` routes to metadata-filtered retrieval only when exactly one article is mentioned. Multi-article queries may miss one article if cosine scores are unbalanced. | Partially addressed by Codex V2 finding #5. |
 | 6 | **No token budget management** | Total prompt tokens for synthesis are unbounded. No truncation before the OpenAI call. | Low risk at current corpus size. Add token budget cap if context window errors appear. |
-
----
-
-## Codex Review V2 — All Resolved ✅
-
-All 8 findings from the 2026-03-17 Codex review are closed. See `COMPLETED.md` for details.
 
 ---
 
@@ -67,7 +59,7 @@ Implement `evals/run.py` — Recall@k, MRR, hit rate against golden dataset. Com
 
 ### Cross-reference expansion improvements [High effort] — CRUCIAL
 
-The current cross-reference system only handles **article-to-article** references via the `referenced_articles` metadata field. Three open gaps (all require re-ingest):
+The current cross-reference system only handles **article-to-article** references via the `referenced_articles` metadata field. Two open gaps (both require re-ingest):
 
 | # | Gap | What's missing | Requires re-ingest? | Priority |
 |---|-----|---------------|---------------------|----------|
@@ -80,17 +72,8 @@ The current cross-reference system only handles **article-to-article** reference
 
 ## UI/UX — Phase 2
 
-### Regulation reference tracking ✅ CLOSED 2026-03-18
-`referenced_external` is now included in `ArticleResponse` (backend + Pydantic model) and rendered as amber non-clickable badges in `DocumentViewer.tsx`.
-
-### Extract legal text parsing logic ✅ CLOSED 2026-03-18
-`legal-text-parser.ts` extracted from `ProvisionText.tsx`. Exports 6 regexes, `splitInlineItems`, and `parseTextRuns` returning typed `ParsedRun[]`. `ProvisionText.tsx` now imports from the parser and uses a local `renderRuns()` React adapter.
-
 ### Italian language parity audit [Medium effort]
 Verify all English-side fixes (external ref exclusion, inline list splitting, cross-ref rendering, article viewer formatting) work correctly for Italian text. Italian uses different prepositions (`del/della/dello`), article keywords (`Articolo`), and legislative terminology (`Regolamento/Direttiva`).
-
-### Split article handling audit ✅ CLOSED 2026-03-18
-Verified end-to-end. No production code changes needed. Added 2 tests in `TestLetteredArticleHandling` and 2 tests in `TestDirectArticleLookup` confirming `"92a"`/`"92b"` metadata, node_id, and direct-lookup detection all work correctly.
 
 ### Clickable hierarchy breadcrumbs [Medium effort, blocked by tree navigator API]
 `DocumentBreadcrumb.tsx` renders breadcrumbs as plain text. Clicking "Chapter 6" should show all articles in that chapter. Requires `GET /api/navigator/{level}/{id}` endpoint.
@@ -124,7 +107,7 @@ Detect query complexity and conditionally invoke extended thinking only for comp
 ## Medium Priority
 
 ### Hybrid alpha tuning [Low effort, blocked by golden dataset]
-`RETRIEVAL_ALPHA` is now configurable via env var (default `0.5`; documented in `.env.example`). ✅ CLOSED 2026-03-18 (tuning still requires golden dataset). Sweep `alpha` values (0.3–0.7) and measure Recall@6 on golden dataset.
+`RETRIEVAL_ALPHA` env var is now wired in (default `0.5`). Tune by sweeping values (0.3–0.7) and measuring Recall@6 on golden dataset once it exists.
 
 ### Experiment tracking [Medium effort]
 Add `evals/config.json` per run capturing: embed model, top_k, cutoff, alpha, prompt hash, corpus version (CELEX + date). Store alongside results for regression detection.
@@ -138,9 +121,6 @@ Add `--upsert` mode to ingest pipeline that checks existing node_ids and only re
 
 ### Embedding model benchmark [Medium effort, blocked by golden dataset]
 Benchmark BGE-M3 vs. alternatives (e.g. `multilingual-e5-large-instruct`) on Recall@6 / MRR using golden dataset.
-
-### Corpus dedup ✅ CLOSED 2026-03-18
-`_parse_with_beautifulsoup()` now deduplicates by `node_id` before returning. Duplicate `node_id`s emit a `WARNING` log; count of removed duplicates is logged at `INFO`. 2 tests added in `TestCorpusDedup`.
 
 ### Dynamic top_k [Low effort, blocked by golden dataset]
 Tune top_k based on query complexity after golden dataset exists.

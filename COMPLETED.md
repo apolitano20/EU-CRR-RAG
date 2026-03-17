@@ -5,6 +5,40 @@ For open tasks and backlog, see `WORKLOG.md`.
 
 ---
 
+## 2026-03-17 — Qdrant duplicate accumulation fixed; clean 1490-item index
+
+### Problem
+After the `Settings.transformations = []` fix, Qdrant reported 2151 items instead of the
+expected 1490. Diagnosed via `scripts/diagnose_qdrant.py`: 337 duplicate `node_id`s confirmed
+root cause H1 — LlamaIndex generates a random UUID per `Document` on every run. Without
+`--reset`, Qdrant accumulated new UUIDs on top of old ones (no overwrite, since point ID ≠ old ID).
+
+### Fix
+`src/ingestion/eurlex_ingest.py` — both `_process_article_div()` and `_process_annex_div()`
+now pass `id_=_node_id_to_uuid(node.node_id)` to `Document(...)`. `_node_id_to_uuid()` uses
+`uuid.uuid5` with a fixed namespace to produce a **stable, valid UUID** from the human-readable
+node_id (e.g. `art_92_en` → `c15658fe-a835-5a73-99d8-af3390127e2f`). Same article always maps
+to the same Qdrant point ID → upserts are now idempotent across re-runs without `--reset`.
+
+Note: `id_=node.node_id` (raw string) was tried first but Qdrant rejected it with HTTP 400:
+`value art_1_en is not a valid point ID, valid values are either an unsigned integer or a UUID`.
+
+### Tools added
+- `scripts/diagnose_qdrant.py` — audits Qdrant payloads: item counts per language,
+  duplicate node_ids, annex sub-item breakdown, optional parser ground-truth comparison.
+- Cell 8b added to `colab_ingest.ipynb` — runs the diagnose script after each ingest.
+
+### Housekeeping
+- Deleted diverged `master` branch (local + remote); all work now on `main`.
+- Colab `git pull` was not picking up fixes because pushes went to `master` while Colab
+  tracks `main` (GitHub default). Fixed by `git push origin master:main` then branch cleanup.
+
+### Verified
+- Colab T4 re-ingest: `--reset` EN (745) + IT (745) = **1490 items, PASS**
+- Smoke test: Article 92 query returns correct 4.5%/6%/8%/3% ratios with Article 92 as top-ranked source.
+
+---
+
 ## 2026-03-12 — Project scaffolding complete
 
 ### What was built

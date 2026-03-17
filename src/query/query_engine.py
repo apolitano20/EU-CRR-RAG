@@ -95,6 +95,31 @@ _ART_RE = re.compile(r"\b(?:art(?:icle|\.)?)\s*(\d[\w]*)", re.IGNORECASE)
 # Matches any canonical "Article N" reference after query normalisation.
 _ARTICLE_REF_RE = re.compile(r"\bArticle\s+(\d[\w]*)\b", re.IGNORECASE)
 
+# Matches external directive/regulation citations: "Article 10 of Directive 2014/59/EU",
+# "Articles 74 and 83 of Regulation (EU) No 648/2012".  These must be stripped before
+# counting CRR article references so they are not mistaken for internal lookups.
+_EXTERNAL_DIRECTIVE_RE = re.compile(
+    r"\bArticles?\s+\d[\w]*(?:\s*(?:,|and|or)\s*\d[\w]*)*\s+of\s+(?:Directive|Regulation)\b[^\n,;]*",
+    re.IGNORECASE,
+)
+
+# Matches coordinated article-number runs: "Article 92 and 93", "Articles 92, 93 and 94".
+# Presence of this pattern means multiple CRR articles are mentioned → no direct lookup.
+_ARTICLE_COORD_RE = re.compile(
+    r"\bArticles?\s+\d[\w]*(?:\s*(?:,|and|or)\s*\d[\w]*)+",
+    re.IGNORECASE,
+)
+
+
+def _ref_sort_key(a: str) -> tuple[int, str]:
+    """Sort key for article-number strings: numeric part first, alpha suffix second.
+
+    Handles plain numbers ("92"), lettered variants ("92a", "92aa"), and
+    non-numeric IDs (fall to the front with key 0).
+    """
+    m = re.match(r"^(\d+)(.*)", a)
+    return (int(m.group(1)), m.group(2)) if m else (0, a)
+
 
 def _normalise_query(query: str) -> str:
     """Expand CRR abbreviations and canonicalise article shorthand references."""
@@ -103,16 +128,25 @@ def _normalise_query(query: str) -> str:
 
 
 def _detect_direct_article_lookup(query: str) -> Optional[str]:
-    """Return article number if the query references exactly one article, else None.
+    """Return article number if the query references exactly one CRR article, else None.
 
     Handles any phrasing that mentions a single article:
       - "What are the requirements of Article 73 of the CRR?"
       - "Explain Article 92"
       - "Does Article 428 apply to investment firms?"
-    Does NOT trigger when multiple distinct articles are mentioned, so that
-    cross-article questions ("How do Article 92 and 93 relate?") use normal retrieval.
+
+    Does NOT trigger when:
+      - Multiple distinct articles are mentioned ("How do Article 92 and 93 relate?")
+      - Coordinated bare numbers follow a single article ref ("Article 92 and 93")
+      - The article belongs to an external directive/regulation citation
+        ("Article 10 of Directive 2014/59/EU")
     """
-    matches = _ARTICLE_REF_RE.findall(query)
+    # Remove external directive/regulation refs before counting CRR articles.
+    stripped = _EXTERNAL_DIRECTIVE_RE.sub("", query)
+    # Coordinated article-number runs ("Article 92 and 93") signal multi-article intent.
+    if _ARTICLE_COORD_RE.search(stripped):
+        return None
+    matches = _ARTICLE_REF_RE.findall(stripped)
     unique = set(matches)
     return unique.pop() if len(unique) == 1 else None
 
@@ -319,8 +353,13 @@ class QueryEngine:
         if not refs_to_fetch:
             return []
 
+        # Sort deterministically (numeric part first, alpha suffix second) so the
+        # chosen subset is stable across runs and independent of Python hash order.
+        candidates = sorted(refs_to_fetch, key=_ref_sort_key)
         expanded: list = []
-        for ref_art in list(refs_to_fetch)[:limit]:
+        for ref_art in candidates:
+            if len(expanded) >= limit:
+                break
             try:
                 filters_list = [
                     MetadataFilter(key="article", value=ref_art, operator=FilterOperator.EQ),
@@ -337,6 +376,7 @@ class QueryEngine:
                 expanded.extend(results)
                 _seen.add(ref_art)
             except Exception as exc:
+                # A failed fetch does NOT consume a cap slot — continue to next candidate.
                 logger.warning("Cross-ref expansion failed for Article %s: %s", ref_art, exc)
 
         logger.info(
@@ -535,6 +575,10 @@ class QueryEngine:
     def _configure_settings(self) -> None:
         Settings.embed_model = BGEm3Embedding()
         Settings.llm = OpenAI(model=self.llm_model, api_key=self.openai_api_key)
+        # Invalidate any stale PromptHelper that was cached by a prior code path
+        # (e.g. the indexer sets Settings.llm = None which creates a small context window).
+        # Resetting to None forces LlamaIndex to rebuild it from the current LLM metadata.
+        Settings._prompt_helper = None
 
     def _build_engine(
         self,

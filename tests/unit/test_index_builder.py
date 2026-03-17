@@ -200,3 +200,87 @@ class TestParserIndexerParity:
         """The Article 94 amendment-block fixture must also preserve parity."""
         parser_count, node_count = self._check_parity(eurlex_html_with_amendment_blocks)
         assert parser_count == node_count
+
+
+# ---------------------------------------------------------------------------
+# TestSettingsScope
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestSettingsScope:
+    """_settings_scope() must restore all mutated Settings values on exit.
+
+    Without this guard, HierarchicalIndexer._configure_settings() sets
+    Settings.llm = None and Settings.transformations = [] permanently.
+    Any component that runs afterwards (e.g. QueryEngine) would inherit these
+    values unless it calls its own _configure_settings().
+    """
+
+    def test_settings_restored_after_scope(self):
+        """Values set inside _settings_scope() are reverted on exit.
+
+        Note: Settings.embed_model has a property setter that validates BaseEmbedding,
+        so we test only the attributes that accept arbitrary values (llm=None,
+        transformations, chunk_size, chunk_overlap) or use _configure_settings()
+        to drive mutation inside the scope.
+        """
+        from src.indexing.index_builder import _settings_scope
+
+        # Capture values before entering the scope
+        orig_llm = Settings.llm
+        orig_chunk_size = Settings.chunk_size
+        orig_chunk_overlap = Settings.chunk_overlap
+        orig_transformations = list(Settings.transformations)
+
+        with _settings_scope():
+            # Simulate what _configure_settings() does
+            Settings.llm = None
+            Settings.transformations = []
+            Settings.chunk_size = 8192
+            Settings.chunk_overlap = 0
+
+        assert Settings.llm is orig_llm
+        assert Settings.transformations == orig_transformations
+        assert Settings.chunk_size == orig_chunk_size
+        assert Settings.chunk_overlap == orig_chunk_overlap
+
+    def test_settings_restored_after_configure_settings(self):
+        """After build()/load(), the indexer's Settings mutations are unwound.
+
+        This is the real-world scenario: _configure_settings() sets llm=None,
+        which must not leak to the QueryEngine that runs afterwards.
+        """
+        from src.indexing.index_builder import _settings_scope
+
+        orig_llm = Settings.llm
+
+        indexer = _make_indexer()
+        with _settings_scope():
+            indexer._configure_settings()
+            # Inside scope: LLM was mutated by _configure_settings() (Settings.llm = None
+            # → LlamaIndex substitutes MockLLM in test env; either way it changed).
+            assert Settings.llm is not orig_llm
+
+        # After scope: original llm restored
+        assert Settings.llm is orig_llm, (
+            "Settings.llm was not restored after _settings_scope() exited. "
+            "Indexer mutations must not leak to other components."
+        )
+
+    def test_settings_restored_even_on_exception(self):
+        """Settings are restored even if the body of the scope raises."""
+        from src.indexing.index_builder import _settings_scope
+
+        orig_llm = Settings.llm
+        orig_chunk_size = Settings.chunk_size
+
+        with pytest.raises(RuntimeError):
+            with _settings_scope():
+                Settings.llm = None
+                Settings.chunk_size = 1
+                raise RuntimeError("boom")
+
+        assert Settings.llm is orig_llm, (
+            "Settings.llm must be restored after exception inside _settings_scope()"
+        )
+        assert Settings.chunk_size == orig_chunk_size

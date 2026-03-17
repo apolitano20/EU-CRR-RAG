@@ -4,6 +4,8 @@ Unit tests for QueryEngine internals that can be exercised without Qdrant or Ope
 Tests cover:
 - _retrieve_with_filters: HYBRID→DEFAULT fallback logic
 - synthesis node merging: expanded nodes are deduped and included
+- _ref_sort_key: deterministic article-number sort order
+- _expand_cross_references: deterministic ordering and cap not consumed by failed fetches
 """
 from __future__ import annotations
 
@@ -230,6 +232,31 @@ class TestSynthesisNodeMerging:
             "Duplicate node with same node_id should be deduplicated"
         )
 
+    def test_configure_settings_resets_prompt_helper(self):
+        """_configure_settings() must assign None to Settings._prompt_helper.
+
+        If a prior code path (e.g. the indexer setting llm=None) left a cached
+        PromptHelper with a smaller context window, synthesis would repack to the
+        wrong token budget.  Resetting to None forces LlamaIndex to rebuild it
+        from the current LLM metadata (GPT-4o, 128k context).
+
+        Patch the entire Settings object to avoid LlamaIndex property-setter
+        validation (embed_model and llm setters reject non-BaseEmbedding / non-LLM
+        values, which would raise before we reach the _prompt_helper reset line).
+        """
+        from src.query.query_engine import QueryEngine
+
+        qe = QueryEngine.__new__(QueryEngine)
+        qe.llm_model = "gpt-4o"
+        qe.openai_api_key = "test"
+
+        with patch("src.query.query_engine.Settings") as mock_settings:
+            qe._configure_settings()
+            assert mock_settings._prompt_helper is None, (
+                "_configure_settings() must assign None to Settings._prompt_helper "
+                "so LlamaIndex rebuilds it with the current LLM's context window."
+            )
+
     def test_expanded_sources_flagged_correctly(self):
         """Sources list: primary nodes have expanded=False, expansion nodes expanded=True."""
         qe = self._build_query_engine()
@@ -251,3 +278,113 @@ class TestSynthesisNodeMerging:
         expanded_flags = {s["metadata"]["article"]: s["expanded"] for s in result.sources}
         assert expanded_flags["92"] is False
         assert expanded_flags["26"] is True
+
+
+# ---------------------------------------------------------------------------
+# _ref_sort_key
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestRefSortKey:
+    """_ref_sort_key must order article numbers numerically with alpha suffix tie-break."""
+
+    def _key(self, a: str):
+        from src.query.query_engine import _ref_sort_key
+        return _ref_sort_key(a)
+
+    def test_plain_numbers_ordered_numerically(self):
+        articles = ["114", "26", "92"]
+        assert sorted(articles, key=self._key) == ["26", "92", "114"]
+
+    def test_alpha_suffix_after_numeric(self):
+        """92a < 92b, and 92 < 92a."""
+        assert sorted(["92b", "92", "92a"], key=self._key) == ["92", "92a", "92b"]
+
+    def test_multi_char_suffix(self):
+        """92aa sorts after 92a."""
+        assert sorted(["92aa", "92a", "92"], key=self._key) == ["92", "92a", "92aa"]
+
+    def test_non_numeric_id_falls_to_front(self):
+        """Non-numeric IDs get key (0, id) and sort before numeric ones."""
+        result = sorted(["92", "anx_I", "26"], key=self._key)
+        assert result[0] == "anx_I"
+
+    def test_mixed_set_stable(self):
+        """A realistic set of refs sorts deterministically."""
+        refs = {"114", "92", "26", "92a", "4"}
+        result = sorted(refs, key=self._key)
+        assert result == ["4", "26", "92", "92a", "114"]
+
+
+# ---------------------------------------------------------------------------
+# _expand_cross_references: determinism + cap behaviour
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestExpandCrossReferences:
+    """_expand_cross_references must be deterministic and not waste cap slots on failures."""
+
+    def _engine_with_refs(self, refs_csv: str, failing_articles: set[str] | None = None):
+        """Build a minimal QueryEngine where one source node has the given refs_csv."""
+        from src.query.query_engine import QueryEngine
+        from src.indexing.vector_store import VectorStore
+        from src.indexing.index_builder import HierarchicalIndexer
+
+        failing_articles = failing_articles or set()
+
+        qe = QueryEngine.__new__(QueryEngine)
+        qe.max_cross_ref_expansions = 3
+        qe._vector_index = MagicMock()
+
+        # Source node with referenced_articles CSV
+        source = _make_node("art_92_en", "92")
+        source.node.metadata = {"article": "92", "referenced_articles": refs_csv}
+
+        def fake_retrieve(filters, query_str, top_k):
+            # Extract article number from query_str ("Article N")
+            art = query_str.split()[-1]
+            if art in failing_articles:
+                raise RuntimeError(f"Simulated fetch failure for Article {art}")
+            return [_make_node(f"art_{art}_en", art)]
+
+        qe._retrieve_with_filters = MagicMock(side_effect=fake_retrieve)
+        return qe, [source]
+
+    def test_refs_fetched_in_numeric_order(self):
+        """References must be fetched in ascending numeric order, not hash order."""
+        qe, source_nodes = self._engine_with_refs("114,26,4")
+        qe._expand_cross_references(source_nodes, language=None, limit=3)
+
+        call_args = [call[1]["query_str"] for call in qe._retrieve_with_filters.call_args_list]
+        fetched_articles = [q.split()[-1] for q in call_args]
+        assert fetched_articles == ["4", "26", "114"], (
+            f"Expected numeric order [4, 26, 114] but got {fetched_articles}"
+        )
+
+    def test_cap_not_consumed_by_failed_fetch(self):
+        """A failed fetch must not count against the expansion cap.
+
+        With limit=2 and refs [26, 93, 114] where article 26 fails:
+        both 93 and 114 must be returned (cap still has 2 slots after the failure).
+
+        Note: the source node article ("92") is excluded from refs_to_fetch via
+        _seen, so refs must not include the source article number.
+        """
+        qe, source_nodes = self._engine_with_refs("26,93,114", failing_articles={"26"})
+        expanded = qe._expand_cross_references(source_nodes, language=None, limit=2)
+        fetched = {n.node.metadata["article"] for n in expanded}
+        assert fetched == {"93", "114"}, (
+            f"Expected {{'93', '114'}} but got {fetched}. "
+            "Failed fetch for article 26 should not consume a cap slot."
+        )
+
+    def test_cap_stops_at_limit(self):
+        """Exactly `limit` nodes are returned when all fetches succeed."""
+        qe, source_nodes = self._engine_with_refs("4,26,92,114")
+        expanded = qe._expand_cross_references(source_nodes, language=None, limit=2)
+        assert len(expanded) == 2
+
+    def test_empty_refs_returns_empty(self):
+        qe, source_nodes = self._engine_with_refs("")
+        expanded = qe._expand_cross_references(source_nodes, language=None, limit=3)
+        assert expanded == []

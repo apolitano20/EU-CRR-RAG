@@ -5,6 +5,52 @@ For open tasks and backlog, see `WORKLOG.md`.
 
 ---
 
+## 2026-03-17 — 4 medium/low-priority code-only fixes; 217 unit tests green
+
+### Summary
+Closed 4 Codex V2 findings that required no re-ingestion. Added 25 new unit tests.
+
+### Fix 1 — Direct article lookup: external ref misclassification (`query_engine.py`)
+- Added `_EXTERNAL_DIRECTIVE_RE` regex to strip `Article N of Directive/Regulation ...`
+  citations before counting CRR article references.
+- Added `_ARTICLE_COORD_RE` regex to detect coordinated bare-number runs
+  (`Article 92 and 93`, `Article 92, 93 and 94`) and return `None` (multi-article intent).
+- `_detect_direct_article_lookup()` now correctly returns `None` for external refs
+  and coordinated phrasing, and returns the single CRR article when only one remains
+  after stripping externals.
+
+### Fix 2 — Cross-ref expansion non-deterministic cap (`query_engine.py`)
+- Added `_ref_sort_key()` helper: sorts article numbers numerically with alpha suffix
+  tie-break (`"92" < "92a" < "92aa"`, non-numeric falls to front).
+- `_expand_cross_references()` now sorts candidates with `_ref_sort_key` before slicing,
+  making expansion order stable across Python runs.
+- A failed/missing article no longer consumes a cap slot: the loop now checks
+  `len(expanded) >= limit` at the top of each iteration and continues to the next
+  candidate on exception, so `limit` successful expansions are always attempted.
+
+### Fix 3 — Stale PromptHelper cache (`query_engine.py`)
+- `QueryEngine._configure_settings()` now resets `Settings._prompt_helper = None`
+  immediately after setting the LLM, forcing LlamaIndex to rebuild the PromptHelper
+  from GPT-4o's 128k context window on next use.
+
+### Fix 4 — `_configure_settings()` global Settings mutation (`index_builder.py`)
+- Added `_settings_scope()` context manager (snapshot + try/finally restore).
+- `HierarchicalIndexer.build()` and `.load()` now wrap their bodies with
+  `_settings_scope()`, so the indexer's Settings mutations (`llm=None`,
+  `transformations=[]`, etc.) are unwound before returning.
+
+### Test additions
+- `test_query_normalise.py`: 8 new cases covering external directive refs and
+  coordinated bare-number phrasing.
+- `test_query_engine_unit.py`: `TestRefSortKey` (5 cases), `TestExpandCrossReferences`
+  (4 cases), `test_configure_settings_resets_prompt_helper`.
+- `test_index_builder.py`: `TestSettingsScope` (3 cases) covering normal exit,
+  post-`_configure_settings` restoration, and exception path.
+
+**Test count: 217 unit tests, all green.**
+
+---
+
 ## 2026-03-17 — Qdrant duplicate accumulation fixed; clean 1490-item index
 
 ### Problem
@@ -471,6 +517,20 @@ New query-time capability: "which articles cite Article 92?" — implemented wit
 **Finding**: `article_title` in metadata is parsed directly from the `stitle-article-norm` CSS class inside `eli-title` in EUR-Lex HTML — **not LLM-synthesized**. Any title variation reflects the EUR-Lex source.
 
 **Fix**: Added fallback in `_process_article_div()` — if `stitle-article-norm` is absent, the ingester now tries the first `<p>` in `eli-title` that is not `title-article-norm` (the article-number heading). Takes effect on next re-ingest.
+
+---
+
+## 2026-03-15 — UI fixes: missing article detection + numbered point label
+
+### Missing/deleted article detection
+Backend already returned 404 for missing articles. Frontend handling added:
+- `ArticleNotFoundError` class added to `api.ts` (thrown on 404)
+- `AppLayout` owns `viewerError` state
+- Both `ChatPanel.handleSourceClick` and `DocumentViewer.handleArticleRef` catch `ArticleNotFoundError` and call `onArticleNotFound(id)`, which sets `viewerError` and clears `selectedArticle`
+- Viewer renders a "Article N was not found in the CRR" message panel instead of blank
+
+### Numbered point label not bold (minor formatting fix)
+Root cause: `NUMBERED_PARA_RE = /^\d+\.\s+/` required text on the same line — a bare `7.` label (backend returns the number on one line, text on the next) didn't match and rendered as a plain `<p>`. Fixed by extending regex to `/^\d+\.(\s|$)/` and handling the empty-body case in the render path. (`ProvisionText.tsx`)
 
 ---
 

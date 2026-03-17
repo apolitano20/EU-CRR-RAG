@@ -116,3 +116,45 @@ class TestDirectArticleLookup:
 
     def test_empty_string_not_matched(self):
         assert _detect_direct_article_lookup("") is None
+
+    # --- Item 1 regression: external directive/regulation citations ---
+
+    def test_external_directive_ref_not_matched(self):
+        """Article 10 of Directive 2014/59/EU must not trigger direct lookup."""
+        assert _detect_direct_article_lookup(
+            "Article 10 of Directive 2014/59/EU"
+        ) is None
+
+    def test_external_regulation_ref_not_matched(self):
+        """Article 4(1)(40) of Regulation (EU) No 648/2012 must not trigger direct lookup."""
+        assert _detect_direct_article_lookup(
+            "What is covered by Article 4 of Regulation (EU) No 648/2012?"
+        ) is None
+
+    def test_external_ref_stripped_leaving_single_crr_article(self):
+        """After stripping external ref, a single remaining CRR article triggers lookup."""
+        # "Article 92 and Article 10 of Directive 2014/59/EU" — external stripped, 92 remains
+        result = _detect_direct_article_lookup(
+            "Article 92 and Article 10 of Directive 2014/59/EU"
+        )
+        assert result == "92"
+
+    def test_multi_article_external_ref_not_matched(self):
+        """Articles 74 and 83 of Directive 2013/36/EU — both external, no CRR article."""
+        assert _detect_direct_article_lookup(
+            "Do Articles 74 and 83 of Directive 2013/36/EU apply to CRR reporting?"
+        ) is None
+
+    # --- Item 1 regression: coordinated bare numbers ---
+
+    def test_coordinated_bare_numbers_not_matched(self):
+        """'Article 92 and 93' has bare '93' — must not trigger single-article lookup."""
+        assert _detect_direct_article_lookup("How do Article 92 and 93 relate?") is None
+
+    def test_coordinated_comma_bare_numbers_not_matched(self):
+        """'Article 92, 93' — comma-separated bare numbers."""
+        assert _detect_direct_article_lookup("Article 92, 93 and 94 requirements") is None
+
+    def test_coordinated_articles_keyword_not_matched(self):
+        """'Articles 89 to 91' phrasing — bare run after initial ref."""
+        assert _detect_direct_article_lookup("See Articles 89 and 90 for details") is None

@@ -235,7 +235,7 @@ class EurLexIngester:
         )
         meta = node.to_metadata()
         meta["language"] = self.language
-        return Document(text=text, metadata=meta)
+        return Document(text=text, metadata=meta, id_=node.node_id)
 
     # ------------------------------------------------------------------
     # Annex processing
@@ -263,7 +263,7 @@ class EurLexIngester:
         )
         meta = node.to_metadata()
         meta["language"] = self.language
-        return Document(text=text, metadata=meta)
+        return Document(text=text, metadata=meta, id_=node.node_id)
 
     # ------------------------------------------------------------------
     # Structured text extraction

@@ -5,6 +5,22 @@ For open tasks and backlog, see `WORKLOG.md`.
 
 ---
 
+## 2026-03-17 — Codex V2 ingestion + query fixes (Fixes 1–4); 234 unit tests green
+
+Four parsing/extraction bugs from the Codex Review V2 fixed across `eurlex_ingest.py` and `query_engine.py`. 17 new unit tests added; all 234 pass. Re-ingest on Colab (with `--reset` for Fix 1) still needed.
+
+**Fix 1 — Annex overmatch** (`eurlex_ingest.py:176`): regex `^anx_` → `^anx_[^.]+$` prevents sub-annex IDs (e.g. `anx_IV.1`) from being indexed as separate documents, eliminating duplicate Qdrant points for multi-section annexes.
+
+**Fix 2 — Formula paragraph child-walk** (`eurlex_ingest.py:468`): replaced `elem.find("img")` + early-return with an in-order child walk that emits text tokens and `[FORMULA_N]` placeholders together, preserving prefix and suffix text around inline formula images.
+
+**Fix 3 — Layout-A nested grid flattening** (`eurlex_ingest.py:411`): replaced `cols[1].get_text(...)` with a loop that collects direct text/inline into `col_parts` and calls `walk()` for nested `<div>` sub-points, so nested sub-point labels and formula placeholders are preserved as separate entries rather than being concatenated.
+
+**Fix 4a — Cross-reference range parsing** (`eurlex_ingest.py:611`): replaced single-number regex with a full-run pattern (`Articles N to M`, comma/and lists); expands ranges into individual article numbers and captures multi-letter suffixes (`92aa`).
+
+**Fix 4b — Query-time range expansion** (`query_engine.py`): added `_expand_article_ranges()` wired into `_normalise_query()` so queries like "Articles 89 to 91" are expanded to explicit article references before BM25/dense retrieval.
+
+---
+
 ## 2026-03-17 — 4 medium/low-priority code-only fixes; 217 unit tests green
 
 ### Summary

@@ -110,6 +110,25 @@ _ARTICLE_COORD_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Matches "Articles N to M" range syntax for query-time expansion.
+_RANGE_RE = re.compile(r"\bArticles?\s+(\d+[a-z]*)\s+to\s+(\d+[a-z]*)\b", re.I)
+
+
+def _expand_article_ranges(query: str) -> str:
+    """Expand 'Articles N to M' into explicit 'Article N Article N+1 ... Article M'.
+
+    Helps BM25/dense retrieval find individual articles in a range query.
+    A sanity cap prevents expansion of unreasonably large ranges (> 20 articles).
+    """
+    def expand(m: re.Match) -> str:
+        lo_str, hi_str = m.group(1), m.group(2)
+        lo = int(re.match(r"\d+", lo_str).group())
+        hi = int(re.match(r"\d+", hi_str).group())
+        if hi <= lo or (hi - lo) > 20:
+            return m.group(0)
+        return " ".join(f"Article {n}" for n in range(lo, hi + 1))
+    return _RANGE_RE.sub(expand, query)
+
 
 def _ref_sort_key(a: str) -> tuple[int, str]:
     """Sort key for article-number strings: numeric part first, alpha suffix second.
@@ -122,9 +141,11 @@ def _ref_sort_key(a: str) -> tuple[int, str]:
 
 
 def _normalise_query(query: str) -> str:
-    """Expand CRR abbreviations and canonicalise article shorthand references."""
+    """Expand CRR abbreviations, canonicalise article shorthand references, and expand ranges."""
     query = _ABBREV_RE.sub(lambda m: f"{m.group(1)} ({_ABBREV_MAP[m.group(1)]})", query)
-    return _ART_RE.sub(lambda m: f"Article {m.group(1)}", query)
+    query = _ART_RE.sub(lambda m: f"Article {m.group(1)}", query)
+    query = _expand_article_ranges(query)
+    return query
 
 
 def _detect_direct_article_lookup(query: str) -> Optional[str]:

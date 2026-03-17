@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.query.query_engine import _detect_direct_article_lookup, _normalise_query
+from src.query.query_engine import _detect_direct_article_lookup, _expand_article_ranges, _normalise_query
 
 
 class TestNormaliseQuery:
@@ -158,3 +158,35 @@ class TestDirectArticleLookup:
     def test_coordinated_articles_keyword_not_matched(self):
         """'Articles 89 to 91' phrasing — bare run after initial ref."""
         assert _detect_direct_article_lookup("See Articles 89 and 90 for details") is None
+
+
+class TestExpandArticleRanges:
+    """Fix 4b: _expand_article_ranges expands 'Articles N to M' in query strings."""
+
+    def test_range_to_expanded(self):
+        assert _normalise_query("Articles 89 to 91") == "Article 89 Article 90 Article 91"
+
+    def test_range_large_gap_not_expanded(self):
+        """Sanity cap: ranges wider than 20 articles are left unchanged."""
+        result = _normalise_query("Articles 1 to 575")
+        assert "Articles 1 to 575" in result
+
+    def test_range_already_normalised_passthrough(self):
+        """No range pattern → query unchanged by range expander."""
+        original = "What are the own funds requirements under Article 92?"
+        assert _normalise_query(original) == original
+
+    def test_range_expand_helper_directly(self):
+        assert _expand_article_ranges("Articles 10 to 12") == "Article 10 Article 11 Article 12"
+
+    def test_range_case_insensitive(self):
+        result = _expand_article_ranges("articles 5 to 7")
+        assert "Article 5" in result
+        assert "Article 6" in result
+        assert "Article 7" in result
+
+    def test_range_combined_with_abbreviation(self):
+        result = _normalise_query("CET1 requirements in Articles 26 to 28")
+        assert "CET1 (Common Equity Tier 1)" in result
+        assert "Article 26" in result
+        assert "Article 28" in result

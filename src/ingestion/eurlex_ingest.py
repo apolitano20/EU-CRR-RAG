@@ -172,8 +172,9 @@ class EurLexIngester:
             if doc and doc.text.strip():
                 documents.append(doc)
 
-        # Process annexes: each <div id="anx_..."> is one Document
-        for anx_div in soup.find_all("div", id=re.compile(r"^anx_")):
+        # Process annexes: each top-level <div id="anx_X"> is one Document.
+        # Exclude sub-annex IDs like anx_IV.1 (contain a dot) to avoid duplicates.
+        for anx_div in soup.find_all("div", id=re.compile(r"^anx_[^.]+$")):
             doc = self._process_annex_div(anx_div)
             if doc and doc.text.strip():
                 documents.append(doc)
@@ -413,10 +414,30 @@ class EurLexIngester:
                         cols = row.find_all("div", recursive=False)
                         if len(cols) >= 2:
                             label = cols[0].get_text(strip=True)
-                            text = cols[1].get_text(" ", strip=True)
-                            entry = f"  {label} {text}".rstrip()
-                            if entry.strip():
-                                parts.append(entry)
+                            # Collect direct inline/text children of the content column;
+                            # descend into nested div children via walk() so sub-point
+                            # labels, nested text, and formula placeholders are preserved.
+                            col_parts: list[str] = []
+                            div_children_in_col: list = []
+                            for child in cols[1].children:
+                                if not hasattr(child, "name") or child.name is None:
+                                    t = str(child).strip()
+                                    if t:
+                                        col_parts.append(t)
+                                elif child.name == "div":
+                                    div_children_in_col.append(child)
+                                elif child.name in ("p", "span", "em", "strong", "a"):
+                                    t = child.get_text(" ", strip=True)
+                                    if t:
+                                        col_parts.append(t)
+                            if col_parts:
+                                entry = f"  {label} {' '.join(col_parts)}".rstrip()
+                                if entry.strip():
+                                    parts.append(entry)
+                            elif label.strip():
+                                parts.append(f"  {label}")
+                            for child in div_children_in_col:
+                                walk(child)
                 else:
                     # Layout B: direct column children
                     col1 = elem.find("div", class_="grid-list-column-1", recursive=False)
@@ -464,13 +485,22 @@ class EurLexIngester:
                     parts.append(_formula_placeholder(src))
                 return
 
-            # Generic paragraph
+            # Generic paragraph — walk children so prefix/suffix text around
+            # inline formula images is preserved in document order.
             if tag == "p":
-                img = elem.find("img", src=re.compile(r"^data:image"))
-                if img:
-                    parts.append(_formula_placeholder(img.get("src", "")))
-                    return
-                text = elem.get_text(" ", strip=True)
+                tokens: list[str] = []
+                for child in elem.children:
+                    if not hasattr(child, "name") or child.name is None:
+                        t = str(child).strip()
+                        if t:
+                            tokens.append(t)
+                    elif child.name == "img" and child.get("src", "").startswith("data:image"):
+                        tokens.append(_formula_placeholder(child.get("src", "")))
+                    elif child.name in ("strong", "em", "a", "span", "sub", "sup"):
+                        t = child.get_text(" ", strip=True)
+                        if t:
+                            tokens.append(t)
+                text = " ".join(tokens)
                 if text and len(text) >= 5:
                     parts.append(text)
                 return
@@ -608,10 +638,28 @@ class EurLexIngester:
             re.I,
         )
         art_nums: set[str] = set()
-        for m in re.finditer(rf"{keyword}s?\s+(\d+[a-z]?)", text, re.I):
-            after = text[m.end():]
-            if not external_suffix.match(after):
-                art_nums.add(m.group(1))
+        # Match the full article-reference run first (handles ranges and comma/and lists),
+        # then extract all individual numbers from the run.
+        run_pat = re.compile(
+            rf"\b{keyword}s?\s+\d+[a-z]*(?:\s*(?:,|and|or|to)\s+\d+[a-z]*)*",
+            re.I,
+        )
+        num_pat = re.compile(r"\d+[a-z]*")
+        for run_m in run_pat.finditer(text):
+            run_text = run_m.group()
+            after = text[run_m.end():]
+            if external_suffix.match(after):
+                continue
+            nums_in_run = num_pat.findall(run_text)
+            # Expand "N to M" ranges into individual numbers
+            if re.search(r"\bto\b", run_text, re.I) and len(nums_in_run) == 2:
+                lo = int(re.match(r"\d+", nums_in_run[0]).group())
+                hi = int(re.match(r"\d+", nums_in_run[1]).group())
+                for n in range(lo, hi + 1):
+                    art_nums.add(str(n))
+            else:
+                for n in nums_in_run:
+                    art_nums.add(n)
 
         # External: language-specific directive/regulation patterns
         ext_patterns = _EXTERNAL_REF_PATTERNS.get(self.language, _EXTERNAL_REF_PATTERNS["en"])

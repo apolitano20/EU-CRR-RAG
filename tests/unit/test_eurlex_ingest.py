@@ -216,6 +216,39 @@ class TestCrossReferenceExtraction:
         # so Article 92 should be kept as CRR-internal
         assert "92" in arts.split(",")
 
+    def test_range_to_syntax_captured(self):
+        """Fix 4a: 'Articles 89 to 91' expands to individual article numbers."""
+        ing = ingester("en")
+        arts, _ = ing._extract_cross_references("Institutions shall comply with Articles 89 to 91.")
+        assert "89" in arts.split(",")
+        assert "90" in arts.split(",")
+        assert "91" in arts.split(",")
+
+    def test_comma_list_captured(self):
+        """Fix 4a: 'Articles 89, 90 and 91' captures all three."""
+        ing = ingester("en")
+        arts, _ = ing._extract_cross_references("See Articles 89, 90 and 91 for details.")
+        assert "89" in arts.split(",")
+        assert "90" in arts.split(",")
+        assert "91" in arts.split(",")
+
+    def test_multi_letter_suffix_preserved(self):
+        """Fix 4a: 'Article 92aa' captures '92aa' not '92a'."""
+        ing = ingester("en")
+        arts, _ = ing._extract_cross_references("As per Article 92aa of this Regulation.")
+        assert "92aa" in arts.split(",")
+
+    def test_range_external_ref_excluded(self):
+        """Fix 4a: 'Articles 89 to 91 of Directive ...' → none captured (external ref)."""
+        ing = ingester("en")
+        arts, _ = ing._extract_cross_references(
+            "Articles 89 to 91 of Directive 2013/36/EU shall apply."
+        )
+        tokens = [t for t in arts.split(",") if t]
+        assert "89" not in tokens
+        assert "90" not in tokens
+        assert "91" not in tokens
+
     def test_external_ref_delegated_implementing(self):
         """Delegated/Implementing acts should also be excluded."""
         ing = ingester("en")
@@ -270,6 +303,61 @@ class TestTableAndFormulaFlags:
 # ---------------------------------------------------------------------------
 
 @pytest.mark.unit
+class TestFormulaParagraphParsing:
+    """Fix 2: formula child-walk — prefix/suffix text around inline formulas preserved."""
+
+    def test_formula_prefix_and_suffix_preserved(self):
+        html = """<!DOCTYPE html><html><body>
+        <div id="prt_ONE">
+          <div id="art_1">
+            <p class="title-article-norm">Article 1</p>
+            <p>prefix text <img src="data:image/png;base64,abc123"/> suffix text long enough</p>
+          </div>
+        </div>
+        </body></html>"""
+        docs = ingester("en")._parse_with_beautifulsoup(html)
+        assert len(docs) == 1
+        text = docs[0].text
+        assert "prefix text" in text
+        assert "[FORMULA_" in text
+        assert "suffix text" in text
+        # Verify order: prefix < formula < suffix
+        assert text.index("prefix text") < text.index("[FORMULA_") < text.index("suffix text")
+
+    def test_multiple_formulas_in_one_paragraph(self):
+        html = """<!DOCTYPE html><html><body>
+        <div id="prt_ONE">
+          <div id="art_1">
+            <p class="title-article-norm">Article 1</p>
+            <p><img src="data:image/png;base64,aaa"/> between the formulas <img src="data:image/png;base64,bbb"/></p>
+          </div>
+        </div>
+        </body></html>"""
+        docs = ingester("en")._parse_with_beautifulsoup(html)
+        assert len(docs) == 1
+        text = docs[0].text
+        assert "[FORMULA_0]" in text
+        assert "[FORMULA_1]" in text
+        assert text.index("[FORMULA_0]") < text.index("between") < text.index("[FORMULA_1]")
+
+    def test_formula_paragraph_does_not_drop_next_paragraph(self):
+        html = """<!DOCTYPE html><html><body>
+        <div id="prt_ONE">
+          <div id="art_1">
+            <p class="title-article-norm">Article 1</p>
+            <p>Introduction text <img src="data:image/png;base64,abc123"/> more text here</p>
+            <p>Second paragraph with enough content to be included here.</p>
+          </div>
+        </div>
+        </body></html>"""
+        docs = ingester("en")._parse_with_beautifulsoup(html)
+        assert len(docs) == 1
+        text = docs[0].text
+        assert "[FORMULA_" in text
+        assert "Second paragraph" in text
+
+
+@pytest.mark.unit
 class TestAnnexParsing:
     def test_annex_produces_document(self, eurlex_html_annex):
         docs = ingester("en")._parse_with_beautifulsoup(eurlex_html_annex)
@@ -294,6 +382,31 @@ class TestAnnexParsing:
     def test_annex_text_not_empty(self, eurlex_html_annex):
         docs = ingester("en")._parse_with_beautifulsoup(eurlex_html_annex)
         assert len(docs[0].text.strip()) > 0
+
+    def test_sub_annex_not_indexed_separately(self):
+        """Fix 1: <div id="anx_IV.1"> must not be indexed as a separate document."""
+        html = """<!DOCTYPE html><html><body>
+        <div id="anx_IV">
+          <p class="title-annex-1">ANNEX IV</p>
+          <p>Main annex content with sufficient length for this test.</p>
+          <div id="anx_IV.1">
+            <p>Sub-annex IV.1 content that should not be indexed separately.</p>
+          </div>
+        </div>
+        </body></html>"""
+        docs = ingester("en")._parse_with_beautifulsoup(html)
+        assert len(docs) == 1, f"Expected 1 document (top-level annex only), got {len(docs)}"
+
+    def test_top_level_annex_still_indexed(self):
+        """Fix 1 regression guard: plain <div id="anx_I"> must still produce one document."""
+        html = """<!DOCTYPE html><html><body>
+        <div id="anx_I">
+          <p class="title-annex-1">ANNEX I</p>
+          <p>Annex I content with sufficient length for the minimum threshold check.</p>
+        </div>
+        </body></html>"""
+        docs = ingester("en")._parse_with_beautifulsoup(html)
+        assert len(docs) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -368,6 +481,57 @@ class TestGridListParsing:
     def test_point_text_appears(self, eurlex_html_with_points):
         docs = ingester("en")._parse_with_beautifulsoup(eurlex_html_with_points)
         assert "capital instruments" in docs[0].text
+
+    def test_nested_sub_points_in_grid_list(self):
+        """Fix 3: nested div sub-points in Layout-A cols[1] appear separately, not concatenated."""
+        html = """<!DOCTYPE html><html><body>
+        <div id="prt_ONE">
+          <div id="art_1">
+            <p class="title-article-norm">Article 1</p>
+            <div class="grid-container grid-list">
+              <div class="grid-row">
+                <div class="col-1">(a)</div>
+                <div class="col-2">
+                  <div class="norm">sub-point (i) first nested content text</div>
+                  <div class="norm">sub-point (ii) second nested content text</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        </body></html>"""
+        docs = ingester("en")._parse_with_beautifulsoup(html)
+        assert len(docs) == 1
+        text = docs[0].text
+        assert "first nested content text" in text
+        assert "second nested content text" in text
+        # They appear as separate lines (not merged into one long string)
+        lines = [line.strip() for line in text.split("\n") if line.strip()]
+        first_idx = next((i for i, l in enumerate(lines) if "first nested content" in l), None)
+        second_idx = next((i for i, l in enumerate(lines) if "second nested content" in l), None)
+        assert first_idx is not None and second_idx is not None
+        assert first_idx != second_idx, "Sub-points should appear on separate lines, not concatenated"
+
+    def test_nested_formula_in_grid_list(self):
+        """Fix 3: inline formula inside nested div in Layout-A cols[1] emits placeholder."""
+        html = """<!DOCTYPE html><html><body>
+        <div id="prt_ONE">
+          <div id="art_1">
+            <p class="title-article-norm">Article 1</p>
+            <div class="grid-container grid-list">
+              <div class="grid-row">
+                <div class="col-1">(b)</div>
+                <div class="col-2">
+                  <div class="norm"><img src="data:image/png;base64,abc123" alt="formula"/></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        </body></html>"""
+        docs = ingester("en")._parse_with_beautifulsoup(html)
+        assert len(docs) == 1
+        assert "[FORMULA_" in docs[0].text
 
 
 # ---------------------------------------------------------------------------

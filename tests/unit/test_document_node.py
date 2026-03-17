@@ -115,6 +115,16 @@ class TestToMetadata:
         meta = node.to_metadata()
         assert meta["referenced_articles"] == ""
 
+    def test_referenced_annexes_default_empty(self):
+        node = self._node()
+        meta = node.to_metadata()
+        assert meta["referenced_annexes"] == ""
+
+    def test_referenced_annexes_populated(self):
+        node = self._node(referenced_annexes="I,III")
+        meta = node.to_metadata()
+        assert meta["referenced_annexes"] == "I,III"
+
     def test_has_table_default_false(self):
         node = self._node()
         meta = node.to_metadata()

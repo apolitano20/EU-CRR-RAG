@@ -2,8 +2,8 @@
 
 import type { ReactNode } from "react";
 
-// Matches "Article 92" or "Articles 92" — captures the word and number separately
-const ART_REF_RE = /\b(Articles?)\s+(\d[\w]*)/g;
+// Matches "Article 92" or "Articles 92 and 93" — captures the keyword and the full number run
+const ART_RUN_RE = /\b(Articles?)\s+(\d[\w]*(?:\s*(?:,|and|or)\s+\d[\w]*)*)/gi;
 
 // Text following an Article ref that signals an external regulation (not CRR)
 const EXTERNAL_CONTEXT_RE = /^\s*(?:to\s+\d[\w]*\s+)?of\s+(?:Regulation|Directive|Decision|Delegated|Implementing)/i;
@@ -36,27 +36,42 @@ function parseRefs(text: string, onArticleRef: (id: string) => void): ReactNode[
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
-  ART_REF_RE.lastIndex = 0;
-  while ((match = ART_REF_RE.exec(text)) !== null) {
+  ART_RUN_RE.lastIndex = 0;
+  while ((match = ART_RUN_RE.exec(text)) !== null) {
     if (match.index > lastIndex) {
       parts.push(text.slice(lastIndex, match.index));
     }
-    const [fullMatch, word, num] = match;
+    const [fullMatch, word, body] = match;
     const textAfter = text.slice(match.index + fullMatch.length);
 
-    // If followed by "of Regulation/Directive/...", it's an external ref — render as plain text
+    // If the run is followed by "of Regulation/Directive/...", the whole run is an external ref
     if (EXTERNAL_CONTEXT_RE.test(textAfter)) {
-      parts.push(`${word} ${num}`);
+      parts.push(fullMatch);
     } else {
-      parts.push(
-        <button
-          key={`art-${num}-${match.index}`}
-          onClick={() => onArticleRef(num)}
-          className="text-[#003399] hover:text-[#002277] hover:underline font-medium cursor-pointer"
-        >
-          {word} {num}
-        </button>
-      );
+      // Emit the keyword as plain text, then linkify each number in the run
+      parts.push(`${word} `);
+      const numRe = /\d[\w]*/g;
+      let numMatch: RegExpExecArray | null;
+      let bodyLastIndex = 0;
+      while ((numMatch = numRe.exec(body)) !== null) {
+        if (numMatch.index > bodyLastIndex) {
+          parts.push(body.slice(bodyLastIndex, numMatch.index));
+        }
+        const num = numMatch[0];
+        parts.push(
+          <button
+            key={`art-${num}-${match.index}-${numMatch.index}`}
+            onClick={() => onArticleRef(num)}
+            className="text-[#003399] hover:text-[#002277] hover:underline font-medium cursor-pointer"
+          >
+            {num}
+          </button>
+        );
+        bodyLastIndex = numMatch.index + num.length;
+      }
+      if (bodyLastIndex < body.length) {
+        parts.push(body.slice(bodyLastIndex));
+      }
     }
     lastIndex = match.index + fullMatch.length;
   }

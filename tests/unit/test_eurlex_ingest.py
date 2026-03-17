@@ -171,7 +171,7 @@ class TestCrossReferenceExtraction:
     def test_extract_cross_references_directly(self):
         ing = ingester("en")
         text = "As per Article 26 and Article 429a, see also Directive 2013/36/EU."
-        arts, ext = ing._extract_cross_references(text)
+        arts, ext, annexes = ing._extract_cross_references(text)
         assert "26" in arts
         assert "429" in arts
         assert "Directive 2013/36/EU" in ext
@@ -179,16 +179,17 @@ class TestCrossReferenceExtraction:
     def test_extract_cross_references_italian(self):
         ing = ingester("it")
         text = "Ai sensi dell'Articolo 26 e dell'Articolo 92, si veda la direttiva 2013/36/UE."
-        arts, ext = ing._extract_cross_references(text)
+        arts, ext, annexes = ing._extract_cross_references(text)
         assert "26" in arts
         assert "92" in arts
         assert "2013/36" in ext
 
     def test_extract_cross_references_empty_text(self):
         ing = ingester("en")
-        arts, ext = ing._extract_cross_references("")
+        arts, ext, annexes = ing._extract_cross_references("")
         assert arts == ""
         assert ext == ""
+        assert annexes == ""
 
     def test_external_article_ref_excluded_en(self):
         """Article N of Regulation/Directive should NOT appear in referenced_articles."""
@@ -197,7 +198,7 @@ class TestCrossReferenceExtraction:
             "in accordance with Articles 10 to 14 of Regulation (EU) No 1093/2010 "
             "and Article 8 of Directive 2014/59/EU. See also Article 92."
         )
-        arts, ext = ing._extract_cross_references(text)
+        arts, ext, annexes = ing._extract_cross_references(text)
         assert "10" not in arts.split(",")
         assert "14" not in arts.split(",")
         assert "8" not in arts.split(",")
@@ -210,7 +211,7 @@ class TestCrossReferenceExtraction:
             "conformemente all'Articolo 4 del Regolamento (UE) n. 1093/2010 "
             "e all'Articolo 92 del presente regolamento."
         )
-        arts, ext = ing._extract_cross_references(text)
+        arts, ext, annexes = ing._extract_cross_references(text)
         assert "4" not in arts.split(",")
         # "Articolo 92 del presente regolamento" — "del presente" != "del Regolamento (UE)"
         # so Article 92 should be kept as CRR-internal
@@ -219,7 +220,7 @@ class TestCrossReferenceExtraction:
     def test_range_to_syntax_captured(self):
         """Fix 4a: 'Articles 89 to 91' expands to individual article numbers."""
         ing = ingester("en")
-        arts, _ = ing._extract_cross_references("Institutions shall comply with Articles 89 to 91.")
+        arts, _, _annexes = ing._extract_cross_references("Institutions shall comply with Articles 89 to 91.")
         assert "89" in arts.split(",")
         assert "90" in arts.split(",")
         assert "91" in arts.split(",")
@@ -227,7 +228,7 @@ class TestCrossReferenceExtraction:
     def test_comma_list_captured(self):
         """Fix 4a: 'Articles 89, 90 and 91' captures all three."""
         ing = ingester("en")
-        arts, _ = ing._extract_cross_references("See Articles 89, 90 and 91 for details.")
+        arts, _, _annexes = ing._extract_cross_references("See Articles 89, 90 and 91 for details.")
         assert "89" in arts.split(",")
         assert "90" in arts.split(",")
         assert "91" in arts.split(",")
@@ -235,13 +236,13 @@ class TestCrossReferenceExtraction:
     def test_multi_letter_suffix_preserved(self):
         """Fix 4a: 'Article 92aa' captures '92aa' not '92a'."""
         ing = ingester("en")
-        arts, _ = ing._extract_cross_references("As per Article 92aa of this Regulation.")
+        arts, _, _annexes = ing._extract_cross_references("As per Article 92aa of this Regulation.")
         assert "92aa" in arts.split(",")
 
     def test_range_external_ref_excluded(self):
         """Fix 4a: 'Articles 89 to 91 of Directive ...' → none captured (external ref)."""
         ing = ingester("en")
-        arts, _ = ing._extract_cross_references(
+        arts, _, _annexes = ing._extract_cross_references(
             "Articles 89 to 91 of Directive 2013/36/EU shall apply."
         )
         tokens = [t for t in arts.split(",") if t]
@@ -257,10 +258,47 @@ class TestCrossReferenceExtraction:
             "Article 5 of Implementing Regulation (EU) 2021/451 apply. "
             "Article 395 shall also apply."
         )
-        arts, ext = ing._extract_cross_references(text)
+        arts, ext, annexes = ing._extract_cross_references(text)
         assert "3" not in arts.split(",")
         assert "5" not in arts.split(",")
         assert "395" in arts.split(",")
+
+    def test_annex_single_ref(self):
+        """'See Annex I' → referenced_annexes contains 'I'."""
+        ing = ingester("en")
+        _, _, annexes = ing._extract_cross_references("See Annex I for further details.")
+        assert "I" in annexes.split(",")
+
+    def test_annex_plural_run(self):
+        """'Annexes I and III' → referenced_annexes contains 'I' and 'III'."""
+        ing = ingester("en")
+        _, _, annexes = ing._extract_cross_references("As set out in Annexes I and III.")
+        assert "I" in annexes.split(",")
+        assert "III" in annexes.split(",")
+
+    def test_annex_all_four(self):
+        """'Annexes I, II, III and IV' → all four captured in order."""
+        ing = ingester("en")
+        _, _, annexes = ing._extract_cross_references("Refer to Annexes I, II, III and IV.")
+        assert annexes == "I,II,III,IV"
+
+    def test_annex_italian(self):
+        """Italian: 'Allegato II' → referenced_annexes contains 'II'."""
+        ing = ingester("it")
+        _, _, annexes = ing._extract_cross_references("Conformemente all'Allegato II del presente.")
+        assert "II" in annexes.split(",")
+
+    def test_annex_no_false_positive(self):
+        """Article-only text → referenced_annexes is empty."""
+        ing = ingester("en")
+        _, _, annexes = ing._extract_cross_references("Article 92 sets out own funds requirements.")
+        assert annexes == ""
+
+    def test_annex_stable_ordering(self):
+        """'Annexes IV, I and II' → output is 'I,II,IV' (Roman order, not input order)."""
+        ing = ingester("en")
+        _, _, annexes = ing._extract_cross_references("As per Annexes IV, I and II.")
+        assert annexes == "I,II,IV"
 
 
 # ---------------------------------------------------------------------------

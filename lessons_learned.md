@@ -2,6 +2,13 @@
 
 ---
 
+## [2026-03-17] LlamaIndex `Settings` lazy resolver raises `ImportError` on Colab when `llama-index-embeddings-openai` is absent
+**Context:** `_settings_scope()` context manager in `index_builder.py` snapshotting `Settings` attrs before index build.
+**What happened / insight:** `Settings.embed_model`, `.llm`, `.chunk_size`, and `.chunk_overlap` are lazy properties that attempt to resolve the OpenAI default model. On Colab (or any env without `llama-index-embeddings-openai`), this raises `ImportError` before `_configure_settings()` can set BGE-M3. Accessing public properties during snapshot was the trigger.
+**Take-away:** Always access LlamaIndex `Settings` private backing attrs (`_embed_model`, `_llm`, `_transformations`) when reading inside context-manager snapshots to bypass lazy resolution. Guard public properties (`chunk_size`, `chunk_overlap`) with `try/except`. The permanent fix is adding `llama-index-embeddings-openai` to the install list — LlamaIndex imports it as a default even when a non-OpenAI model is used.
+
+---
+
 ## [2026-03-17] BeautifulSoup `<p>` handler: early-return after first `<img>` silently drops surrounding text
 **Context:** Fixing formula/text preservation in `_extract_structured_text()` (Codex V2 Fix 2).
 **What happened / insight:** The original pattern `img = elem.find("img"); if img: parts.append(placeholder); return` discards any text nodes before *and* after the formula in the same `<p>` tag. `get_text()` on the no-formula branch also silently drops `<img>` tags with non-data-URI srcs without warning.

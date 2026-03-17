@@ -130,6 +130,9 @@ def _expand_article_ranges(query: str) -> str:
     return _RANGE_RE.sub(expand, query)
 
 
+_ROMAN_ORDER = ["I", "II", "III", "IV"]
+
+
 def _ref_sort_key(a: str) -> tuple[int, str]:
     """Sort key for article-number strings: numeric part first, alpha suffix second.
 
@@ -347,12 +350,14 @@ class QueryEngine:
         limit: int,
         depth: int = 1,
         _seen: Optional[set] = None,
+        _seen_annexes: Optional[set] = None,
     ) -> list:
-        """Fetch articles referenced by retrieved nodes that aren't already in the result set.
+        """Fetch articles and annexes referenced by retrieved nodes that aren't already in the result set.
 
         Args:
             depth: How many hops to follow (1 = single-pass, 2 = also expand refs of refs).
             _seen: Internal set of already-retrieved article numbers (used for recursion).
+            _seen_annexes: Internal set of already-retrieved annex IDs (used for recursion).
         """
         if limit <= 0 or depth <= 0:
             return []
@@ -370,9 +375,6 @@ class QueryEngine:
                     ref = ref.strip()
                     if ref and ref not in _seen:
                         refs_to_fetch.add(ref)
-
-        if not refs_to_fetch:
-            return []
 
         # Sort deterministically (numeric part first, alpha suffix second) so the
         # chosen subset is stable across runs and independent of Python hash order.
@@ -405,11 +407,48 @@ class QueryEngine:
             depth, len(expanded),
         )
 
+        # Annex expansion
+        if _seen_annexes is None:
+            _seen_annexes = {
+                node.node.metadata.get("annex_id", "")
+                for node in source_nodes
+                if node.node.metadata.get("annex_id")
+            }
+        annex_refs_to_fetch: set[str] = set()
+        for node in source_nodes:
+            csv = node.node.metadata.get("referenced_annexes", "")
+            for ref in csv.split(","):
+                ref = ref.strip().upper()
+                if ref and ref not in _seen_annexes:
+                    annex_refs_to_fetch.add(ref)
+        for ref_anx in [x for x in _ROMAN_ORDER if x in annex_refs_to_fetch]:
+            if len(expanded) >= limit:
+                break
+            try:
+                filters_list = [
+                    MetadataFilter(key="level", value="ANNEX", operator=FilterOperator.EQ),
+                    MetadataFilter(key="annex_id", value=ref_anx, operator=FilterOperator.EQ),
+                ]
+                if language:
+                    filters_list.append(
+                        MetadataFilter(key="language", value=language, operator=FilterOperator.EQ)
+                    )
+                results = self._retrieve_with_filters(
+                    filters=MetadataFilters(filters=filters_list),
+                    query_str=f"Annex {ref_anx}",
+                    top_k=1,
+                )
+                expanded.extend(results)
+                _seen_annexes.add(ref_anx)
+            except Exception as exc:
+                logger.warning("Cross-ref expansion failed for Annex %s: %s", ref_anx, exc)
+
         # Recursive second-hop expansion
         if depth > 1 and expanded:
             remaining = max(0, limit - len(expanded))
             second_hop = self._expand_cross_references(
-                expanded, language=language, limit=remaining, depth=depth - 1, _seen=_seen
+                expanded, language=language, limit=remaining, depth=depth - 1,
+                _seen=_seen, _seen_annexes=_seen_annexes,
             )
             expanded.extend(second_hop)
 

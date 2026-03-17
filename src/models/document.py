@@ -29,6 +29,7 @@ class DocumentNode:
     annex_title: Optional[str] = None          # annex subtitle
     referenced_articles: str = ""              # comma-separated "4,13,92"
     referenced_external: str = ""              # e.g. "Directive 2013/36/EU"
+    referenced_annexes: str = ""              # comma-separated Roman numeral IDs, e.g. "I,III"
     has_table: bool = False
     has_formula: bool = False
     metadata: dict = field(default_factory=dict)
@@ -48,6 +49,7 @@ class DocumentNode:
             "annex_title": self.annex_title or "",
             "referenced_articles": self.referenced_articles,
             "referenced_external": self.referenced_external,
+            "referenced_annexes": self.referenced_annexes,
             "has_table": self.has_table,
             "has_formula": self.has_formula,
             **self.metadata,

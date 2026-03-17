@@ -5,6 +5,23 @@ For open tasks and backlog, see `WORKLOG.md`.
 
 ---
 
+## 2026-03-17 — Re-ingest on Colab with `--reset` — verified clean
+
+Full `--reset` re-ingest run on Colab T4. `diagnose_qdrant.py` confirmed: 1490 items (745 EN + 745 IT), 4 annexes per language (I–IV only, no sub-annex leakage), 741 articles per language, zero duplicate node_ids. All Codex V2 fixes now live in the index.
+
+---
+
+## 2026-03-17 — `_settings_scope()` Colab compatibility fixes (3-commit series + dep add)
+
+Fixed `_settings_scope()` in `index_builder.py` to work on Colab where LlamaIndex's `Settings` lazy resolver raises `ImportError` when `llama-index-embeddings-openai` is not installed. Three progressive fixes applied:
+1. Use private `_embed_model`/`_llm` backing attrs to bypass the resolver during snapshot/restore.
+2. Use `getattr(Settings, '_attr', None)` for all three lazy-resolver properties (`embed_model`, `llm`, `transformations`).
+3. Guard `chunk_size`/`chunk_overlap` snapshot inside `try/except` with a sentinel — if read fails, skip restoration (query engine doesn't need these at query time).
+
+Added `llama-index-embeddings-openai` to the Colab `pip install` cell as the root-cause fix (LlamaIndex imports it as the default embed model even when BGE-M3 is active).
+
+---
+
 ## 2026-03-17 — Codex V2 ingestion + query fixes (Fixes 1–4); 234 unit tests green
 
 Four parsing/extraction bugs from the Codex Review V2 fixed across `eurlex_ingest.py` and `query_engine.py`. 17 new unit tests added; all 234 pass. Re-ingest on Colab (with `--reset` for Fix 1) still needed.

@@ -28,6 +28,20 @@ def _make_node(node_id: str, article: str = "", score: float = 0.8) -> MagicMock
     return node
 
 
+def _make_annex_node(node_id: str, annex_id: str, referenced_annexes: str = "") -> MagicMock:
+    node = MagicMock()
+    node.node.node_id = node_id
+    node.node.metadata = {
+        "article": "",
+        "annex_id": annex_id,
+        "level": "ANNEX",
+        "referenced_annexes": referenced_annexes,
+    }
+    node.node.get_content.return_value = f"content of annex {annex_id}"
+    node.score = 0.8
+    return node
+
+
 # ---------------------------------------------------------------------------
 # _retrieve_with_filters
 # ---------------------------------------------------------------------------
@@ -388,3 +402,74 @@ class TestExpandCrossReferences:
         qe, source_nodes = self._engine_with_refs("")
         expanded = qe._expand_cross_references(source_nodes, language=None, limit=3)
         assert expanded == []
+
+
+# ---------------------------------------------------------------------------
+# _expand_cross_references: annex expansion
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestExpandCrossReferencesAnnex:
+    """Annex refs in referenced_annexes metadata trigger annex node fetches."""
+
+    def _engine_with_annex_refs(
+        self, referenced_annexes: str, failing_annexes: set[str] | None = None
+    ):
+        """Build a minimal QueryEngine where source node has the given referenced_annexes."""
+        from src.query.query_engine import QueryEngine
+
+        failing_annexes = failing_annexes or set()
+
+        qe = QueryEngine.__new__(QueryEngine)
+        qe.max_cross_ref_expansions = 5
+        qe._vector_index = MagicMock()
+
+        source = _make_node("art_92_en", "92")
+        source.node.metadata = {
+            "article": "92",
+            "referenced_articles": "",
+            "referenced_annexes": referenced_annexes,
+        }
+
+        def fake_retrieve(filters, query_str, top_k):
+            # Annex fetches use "Annex X" as query_str
+            parts = query_str.split()
+            if parts[0] == "Annex":
+                anx = parts[1]
+                if anx in failing_annexes:
+                    raise RuntimeError(f"Simulated fetch failure for Annex {anx}")
+                return [_make_annex_node(f"anx_{anx}_en", anx)]
+            # Article fetches
+            art = query_str.split()[-1]
+            return [_make_node(f"art_{art}_en", art)]
+
+        qe._retrieve_with_filters = MagicMock(side_effect=fake_retrieve)
+        return qe, [source]
+
+    def test_annex_refs_fetched(self):
+        """Source node with referenced_annexes='I,III' triggers two annex fetches."""
+        qe, source_nodes = self._engine_with_annex_refs("I,III")
+        expanded = qe._expand_cross_references(source_nodes, language=None, limit=5)
+        annex_ids = {n.node.metadata.get("annex_id") for n in expanded}
+        assert "I" in annex_ids
+        assert "III" in annex_ids
+
+    def test_annex_ref_failure_does_not_consume_cap(self):
+        """Failed Annex I fetch doesn't block II and III from being fetched."""
+        qe, source_nodes = self._engine_with_annex_refs("I,II,III", failing_annexes={"I"})
+        expanded = qe._expand_cross_references(source_nodes, language=None, limit=2)
+        annex_ids = {n.node.metadata.get("annex_id") for n in expanded}
+        assert "II" in annex_ids
+        assert "III" in annex_ids
+
+    def test_annex_refs_fetched_in_roman_order(self):
+        """Fetch order is I, II, IV regardless of CSV order."""
+        qe, source_nodes = self._engine_with_annex_refs("IV,I,II")
+        qe._expand_cross_references(source_nodes, language=None, limit=5)
+        annex_calls = [
+            call[1]["query_str"]
+            for call in qe._retrieve_with_filters.call_args_list
+            if call[1]["query_str"].startswith("Annex")
+        ]
+        fetched_order = [q.split()[1] for q in annex_calls]
+        assert fetched_order == ["I", "II", "IV"]

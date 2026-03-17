@@ -46,6 +46,15 @@ _EXTERNAL_REF_PATTERNS: dict[str, str] = {
     "pl": r"dyrektywa\s+\d{4}/\d+/\w+|rozporządzenie\s+\(UE\)\s+nr\s+[\d/]+",
 }
 
+# Language-specific annex keywords used by _extract_cross_references().
+_ANNEX_KEYWORDS: dict[str, str] = {
+    "en": r"Annex(?:es)?",
+    "it": r"Allegat[oi]",
+    "pl": r"Załącznik(?:ów|iem|i)?",
+}
+_ANNEX_NUM_PAT = re.compile(r"\b(I{1,3}|IV)\b")
+_ROMAN_ORDER = ["I", "II", "III", "IV"]
+
 
 def _extract_hierarchy(parent_id: str) -> dict:
     """Parse a EUR-Lex parent div ID into a hierarchy dict.
@@ -231,7 +240,7 @@ class EurLexIngester:
         if has_formula and self.use_llama_parse and self.llama_cloud_api_key:
             text = self._enrich_formulas_with_llamaparse(art_div, text, len(formula_images))
 
-        ref_articles, ref_external = self._extract_cross_references(text)
+        ref_articles, ref_external, ref_annexes = self._extract_cross_references(text)
 
         node = DocumentNode(
             node_id=f"art_{article_num}_{self.language}",
@@ -245,6 +254,7 @@ class EurLexIngester:
             article_title=article_title or None,
             referenced_articles=ref_articles,
             referenced_external=ref_external,
+            referenced_annexes=ref_annexes,
             has_table=has_table,
             has_formula=has_formula,
         )
@@ -618,13 +628,13 @@ class EurLexIngester:
     # Cross-reference extraction
     # ------------------------------------------------------------------
 
-    def _extract_cross_references(self, text: str) -> tuple[str, str]:
-        """Extract internal article numbers and external directive/regulation references.
+    def _extract_cross_references(self, text: str) -> tuple[str, str, str]:
+        """Extract internal article numbers, external directive/regulation references, and annex refs.
 
         Uses the language-specific article keyword from LanguageConfig so that
         "Articolo 26" (IT) and "Artykuł 26" (PL) are matched correctly.
 
-        Returns (ref_articles_csv, ref_external_csv).
+        Returns (ref_articles_csv, ref_external_csv, ref_annexes_csv).
         """
         # Internal: language-aware article keyword, e.g. "Article 92" / "Articolo 92"
         # Exclude references to external regulations (e.g. "Article 10 of Regulation (EU)...")
@@ -665,7 +675,19 @@ class EurLexIngester:
         ext_patterns = _EXTERNAL_REF_PATTERNS.get(self.language, _EXTERNAL_REF_PATTERNS["en"])
         ext_refs: set[str] = set(re.findall(ext_patterns, text))
 
+        # Annex references: e.g. "Annex I", "Annexes I and III", "Allegato II"
+        annex_keyword = _ANNEX_KEYWORDS.get(self.language, _ANNEX_KEYWORDS["en"])
+        annex_run_pat = re.compile(
+            rf"\b{annex_keyword}\s+(?:IV|I{{1,3}})(?:\s*(?:,|and|or)\s+(?:IV|I{{1,3}}))*",
+            re.I,
+        )
+        annex_nums: set[str] = set()
+        for anx_m in annex_run_pat.finditer(text):
+            for nm in _ANNEX_NUM_PAT.finditer(anx_m.group()):
+                annex_nums.add(nm.group().upper())
+
         return (
             ",".join(sorted(art_nums, key=lambda x: int(re.sub(r"[^0-9]", "", x) or "0"))),
             ",".join(sorted(ext_refs)),
+            ",".join(x for x in _ROMAN_ORDER if x in annex_nums),
         )

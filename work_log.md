@@ -4,13 +4,6 @@ For completed history see `completed.md`.
 
 ---
 
-## Immediate / Next Session
-
-### Re-ingest on Colab with `--reset` [Low effort]
-Fix 1 (annex overmatch) changes which `<div>` elements are selected at parse time. Stale sub-annex Qdrant points (e.g. `anx_IV.1`) will not be removed by upsert — only a `--reset` + full re-ingest clears them. Fixes 2–4 can upsert in-place (same UUID5 IDs) but the `--reset` run subsumes them anyway. Run Colab notebook with `--reset` flag, verify item count stays at 1490 (745 EN + 745 IT), re-run Article 92 smoke test.
-
----
-
 ## High Priority
 
 ### Golden dataset [High effort]

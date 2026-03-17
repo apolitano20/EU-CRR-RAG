@@ -25,9 +25,12 @@ def _settings_scope():
     chunk_size, chunk_overlap) from leaking into other components that share the
     same process — e.g. QueryEngine, which needs Settings.llm = OpenAI(...).
     """
+    # Read private backing attributes directly to avoid triggering the lazy
+    # resolvers on Settings.embed_model / Settings.llm (they try to import
+    # llama-index-embeddings-openai which may not be installed).
     prev = dict(
-        embed_model=Settings.embed_model,
-        llm=Settings.llm,
+        embed_model=Settings._embed_model,
+        llm=Settings._llm,
         transformations=list(Settings.transformations),
         chunk_size=Settings.chunk_size,
         chunk_overlap=Settings.chunk_overlap,

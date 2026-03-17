@@ -45,11 +45,17 @@ class HierarchicalIndexer:
         storage_context = StorageContext.from_defaults(
             vector_store=self.vector_store.as_llama_vector_store()
         )
-        self._vector_index = VectorStoreIndex.from_documents(
-            documents,
+        # Use the constructor directly instead of from_documents() to bypass the
+        # transformation pipeline entirely. from_documents() has a falsy-empty-list
+        # trap: `transformations = transformations or Settings.transformations` means
+        # passing `transformations=[]` falls through to Settings.transformations which
+        # defaults to [SentenceSplitter()]. The constructor path goes straight to
+        # _build_index_from_nodes → _add_nodes_to_index → embed + upsert, with no
+        # chunking at all. Document is a BaseNode subclass so this is safe.
+        self._vector_index = VectorStoreIndex(
+            nodes=documents,  # type: ignore[arg-type]  Document is a BaseNode subclass
             storage_context=storage_context,
             show_progress=True,
-            transformations=[],  # belt-and-suspenders; Settings.transformations=[] is the real guard ([] is falsy so this alone wouldn't work)
         )
         logger.info("Vector index built with %d items.", self.vector_store.item_count)
         return self._vector_index

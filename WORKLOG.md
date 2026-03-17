@@ -72,9 +72,6 @@ The current cross-reference system only handles **article-to-article** reference
 
 ## UI/UX — Phase 2
 
-### Italian language parity audit [Medium effort]
-Verify all English-side fixes (external ref exclusion, inline list splitting, cross-ref rendering, article viewer formatting) work correctly for Italian text. Italian uses different prepositions (`del/della/dello`), article keywords (`Articolo`), and legislative terminology (`Regolamento/Direttiva`).
-
 ### Clickable hierarchy breadcrumbs [Medium effort, blocked by tree navigator API]
 `DocumentBreadcrumb.tsx` renders breadcrumbs as plain text. Clicking "Chapter 6" should show all articles in that chapter. Requires `GET /api/navigator/{level}/{id}` endpoint.
 

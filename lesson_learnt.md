@@ -1,5 +1,25 @@
 # Lessons Learnt
 
+## 2026-03-18 — Multilingual regex: extend keywords AND their surrounding grammar together
+
+**Context:** Extending `ART_RUN_RE` and `EXTERNAL_CONTEXT_RE` in `legal-text-parser.ts` to support Italian article references.
+
+**What happened / insight:** Adding `Articol[oi]` to match Italian article keywords without also adding Italian conjunctions (`e`, `o`) would have left "Articoli 92 e 93" only partially matched — the `e 93` tail would be silently dropped, producing a single-article link instead of two. Similarly, extending `EXTERNAL_CONTEXT_RE` for Italian keywords without adding the Italian preposition variants (`del/della/dello/dell'`) would still have linkified "Articolo 4 del Regolamento" as a CRR internal link. In both cases the keyword variant and its grammatical context form an inseparable unit.
+
+**Take-away:** When adding multilingual support to a regex, audit the full grammatical context — prepositions, conjunctions, and inflections — not just the keyword stem. Write a test for each new grammatical form before shipping.
+
+---
+
+## 2026-03-18 — Vitest is the right test runner for Next.js TypeScript libraries
+
+**Context:** Adding a unit test file for `legal-text-parser.ts`; `frontend/package.json` had no test runner.
+
+**What happened / insight:** Next.js projects don't ship with a test runner. Jest requires `ts-jest` or Babel config to handle TypeScript; Vitest works out of the box on `.ts` files with zero config and runs in `~380 ms` for a pure-logic module with no DOM dependency.
+
+**Take-away:** For frontend utility modules (no React, no DOM), prefer `vitest` with no config file. Add `"test": "vitest run"` to `package.json` scripts.
+
+---
+
 ## 2026-03-17
 
 ### LlamaIndex `Settings` lazy resolver raises `ImportError` in restricted envs (e.g. Colab)

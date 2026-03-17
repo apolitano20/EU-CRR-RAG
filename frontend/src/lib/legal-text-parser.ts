@@ -1,8 +1,8 @@
 // Matches "Article 92" or "Articles 92 and 93" — captures the keyword and the full number run
-export const ART_RUN_RE = /\b(Articles?)\s+(\d[\w]*(?:\s*(?:,|and|or)\s+\d[\w]*)*)/gi;
+export const ART_RUN_RE = /\b(Articles?|Articol[oi])\s+(\d[\w]*(?:\s*(?:,|and|e|or|o)\s+\d[\w]*)*)/gi;
 
 // Text following an Article ref that signals an external regulation (not CRR)
-export const EXTERNAL_CONTEXT_RE = /^\s*(?:to\s+\d[\w]*\s+)?of\s+(?:Regulation|Directive|Decision|Delegated|Implementing)/i;
+export const EXTERNAL_CONTEXT_RE = /^\s*(?:(?:to\s+\d[\w]*\s+)?of|del(?:la|lo|l')?)\s+(?:Regulation|Directive|Decision|Delegated|Implementing|Regolamento|Direttiva|Decisione)/i;
 
 // Lettered/roman list items: "(a) text", "(i) text", optionally with leading whitespace
 export const GRID_ITEM_RE = /^\s*\([a-z]+\)\s/i;

@@ -1,16 +1,22 @@
 import type { ArticleResponse } from "@/lib/types";
 
+const LEVEL_LABELS: Record<string, Record<string, string>> = {
+  it: { part: "Parte", title: "Titolo", chapter: "Capo", section: "Sezione", article: "Articolo" },
+};
+const DEFAULT_LABELS = { part: "Part", title: "Title", chapter: "Chapter", section: "Section", article: "Article" };
+
 interface DocumentBreadcrumbProps {
   article: ArticleResponse;
 }
 
 export default function DocumentBreadcrumb({ article }: DocumentBreadcrumbProps) {
+  const labels = LEVEL_LABELS[article.language ?? "en"] ?? DEFAULT_LABELS;
   const crumbs = [
-    article.part && `Part ${article.part}`,
-    article.title && `Title ${article.title}`,
-    article.chapter && `Chapter ${article.chapter}`,
-    article.section && `Section ${article.section}`,
-    `Article ${article.article}`,
+    article.part    && `${labels.part} ${article.part}`,
+    article.title   && `${labels.title} ${article.title}`,
+    article.chapter && `${labels.chapter} ${article.chapter}`,
+    article.section && `${labels.section} ${article.section}`,
+    `${labels.article} ${article.article}`,
   ].filter(Boolean) as string[];
 
   return (

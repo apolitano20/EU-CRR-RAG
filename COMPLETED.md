@@ -5,6 +5,21 @@ For open tasks and backlog, see `WORKLOG.md`.
 
 ---
 
+## 2026-03-18 — Italian language parity audit: 4 frontend regressions fixed; 14 new tests
+
+Identified and fixed all Italian-language regressions in the frontend viewer. No backend changes required.
+
+| # | File | Fix |
+|---|------|-----|
+| 1 | `legal-text-parser.ts` | `ART_RUN_RE` extended to match `Articolo`/`Articoli` + Italian conjunctions `e`/`o` |
+| 2 | `legal-text-parser.ts` | `EXTERNAL_CONTEXT_RE` extended to handle `del/della/dello/dell'` prepositions and Italian keywords `Regolamento`/`Direttiva`/`Decisione` — prevents external refs like "Articolo 4 del Regolamento (UE) n. 648/2012" from being linkified |
+| 3 | `DocumentBreadcrumb.tsx` | Breadcrumb labels are now language-aware: `Parte`, `Titolo`, `Capo`, `Sezione`, `Articolo` for Italian |
+| 4 | `DocumentViewer.tsx` | "Referenced Regulations & Directives" section header renders as "Regolamenti e Direttive di Riferimento" for Italian articles |
+
+Added `frontend/src/lib/legal-text-parser.test.ts` — 14 vitest tests covering EN linkification, IT linkification, EN/IT external-ref exclusion, and `parseTextRuns` integration. Vitest added as dev dependency; `npm test` script added to `frontend/package.json`.
+
+---
+
 ## 2026-03-18 — 5 low-hanging-fruit items closed; 255 unit tests green
 
 Five independent improvements with no re-ingest required. 10 new unit tests added.

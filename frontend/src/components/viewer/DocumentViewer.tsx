@@ -90,7 +90,7 @@ export default function DocumentViewer({ article, viewerError, onArticleSelect, 
         {article.referenced_external && article.referenced_external.length > 0 && (
           <div className="mt-6 pt-4 border-t border-slate-100">
             <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-2">
-              Referenced Regulations &amp; Directives
+              {article.language === "it" ? "Regolamenti e Direttive di Riferimento" : "Referenced Regulations & Directives"}
             </p>
             <div className="flex flex-wrap gap-1.5">
               {article.referenced_external.map((ref) => (

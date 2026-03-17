@@ -87,6 +87,20 @@ export default function DocumentViewer({ article, viewerError, onArticleSelect, 
       <div className="flex-1 overflow-y-auto px-6 py-5">
         <ProvisionHeader article={article} />
         <ProvisionText text={article.text} onArticleRef={handleArticleRef} />
+        {article.referenced_external && article.referenced_external.length > 0 && (
+          <div className="mt-6 pt-4 border-t border-slate-100">
+            <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-2">
+              Referenced Regulations &amp; Directives
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {article.referenced_external.map((ref) => (
+                <span key={ref}
+                  className="inline-block px-2 py-0.5 text-xs rounded bg-amber-50 text-amber-700 border border-amber-200"
+                >{ref}</span>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

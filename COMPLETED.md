@@ -5,6 +5,35 @@ For open tasks and backlog, see `WORKLOG.md`.
 
 ---
 
+## 2026-03-18 — 5 low-hanging-fruit items closed; 255 unit tests green
+
+Five independent improvements with no re-ingest required. 10 new unit tests added.
+
+| # | Item | Change |
+|---|------|--------|
+| 1 | **Split article audit (92a/92b)** — test-only | Added `TestLetteredArticleHandling` (2 tests) confirming `article="92a"`, `node_id="art_92a_en"` metadata; added 2 tests in `TestDirectArticleLookup` for `_detect_direct_article_lookup("Article 92a")` |
+| 2 | **Corpus deduplication** | `_parse_with_beautifulsoup()` now deduplicates by `node_id` before returning; duplicate nodes emit `WARNING` log; count of removed duplicates logged at `INFO`; 2 tests in `TestCorpusDedup` |
+| 3 | **Regulation reference badges** | `get_article()` extracts `referenced_external` CSV → list; `ArticleResponse` Pydantic model + `ArticleResponse` TS interface gain `referenced_external: list[str]`; `DocumentViewer.tsx` renders amber badges below article text; 2 unit tests |
+| 4 | **RETRIEVAL_ALPHA env var** | `RETRIEVAL_ALPHA: float = float(os.getenv("RETRIEVAL_ALPHA", "0.5"))` constant added; wired into both `_build_engine()` and `_retrieve_with_filters()` `as_retriever()` calls; documented in `.env.example`; 2 unit tests; existing mock helpers updated with `**kwargs` |
+| 5 | **Extract `legal-text-parser.ts`** | New `frontend/src/lib/legal-text-parser.ts` — 6 regexes, `splitInlineItems`, typed `ParsedRun` union, `parseTextRuns()`; `ProvisionText.tsx` now imports from parser and uses local `renderRuns()` React adapter; JSX/CSS unchanged |
+
+**Test count: 255 unit tests, all green.**
+
+---
+
+## 2026-03-18 — Codex V2 ingestion fixes confirmed in code + re-ingest complete
+
+All 8 Codex V2 findings are now resolved. Findings 1–3 were already in the code (applied in the 2026-03-17 session) but re-ingest with `--reset` was needed to clean Qdrant. Re-ingest completed 2026-03-18.
+
+| # | Finding | Fix |
+|---|---------|-----|
+| 1 | **Annex overmatch** — `^anx_` matched sub-annex IDs (`anx_IV.1`) | Regex tightened to `^anx_[^.]+$`; `--reset` re-ingest eliminates stale sub-annex points |
+| 2 | **Formula/text loss** — `get_text()` stripped `<img>` formulas; early return dropped surrounding prose | `<p>` handler walks children token-by-token, emitting text tokens and `[FORMULA_N]` placeholders in document order (lines 498–516) |
+| 3 | **Layout-A nested grid flattening** — `cols[1].get_text()` lost sub-point structure | Layout-A path splits direct inline children (`col_parts`) from div children (`div_children_in_col`), calling `walk()` for each nested div (lines 419–450) |
+| 4–8 | See 2026-03-17 entry below | Already applied |
+
+---
+
 ## 2026-03-17 — Re-ingest on Colab with `--reset` — verified clean
 
 Full `--reset` re-ingest run on Colab T4. `diagnose_qdrant.py` confirmed: 1490 items (745 EN + 745 IT), 4 annexes per language (I–IV only, no sub-annex leakage), 741 articles per language, zero duplicate node_ids. All Codex V2 fixes now live in the index.

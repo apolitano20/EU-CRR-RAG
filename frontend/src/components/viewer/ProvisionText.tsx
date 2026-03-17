@@ -1,86 +1,38 @@
 "use client";
 
 import type { ReactNode } from "react";
-
-// Matches "Article 92" or "Articles 92 and 93" — captures the keyword and the full number run
-const ART_RUN_RE = /\b(Articles?)\s+(\d[\w]*(?:\s*(?:,|and|or)\s+\d[\w]*)*)/gi;
-
-// Text following an Article ref that signals an external regulation (not CRR)
-const EXTERNAL_CONTEXT_RE = /^\s*(?:to\s+\d[\w]*\s+)?of\s+(?:Regulation|Directive|Decision|Delegated|Implementing)/i;
-
-// Lettered/roman list items: "(a) text", "(i) text", optionally with leading whitespace
-const GRID_ITEM_RE = /^\s*\([a-z]+\)\s/i;
-
-// Roman numeral sub-items: "(i) text", "(ii) text" — deeper nesting
-const ROMAN_ITEM_RE = /^\s*\((?:i{1,3}|iv|vi{0,3})\)\s/i;
-
-// Numbered paragraphs: "1. text", "2. text", or bare label "7." on its own line
-const NUMBERED_PARA_RE = /^\d+\.(\s|$)/;
-
-// Split inline list items like "(a) ...; (b) ...; (i) ..." onto separate lines.
-// Only matches single letters (a)-(z) or short roman numerals (i)-(viii) preceded
-// by a semicolon/colon or sentence-ending punctuation to avoid false splits.
-const INLINE_ITEM_RE = /(?:;\s*|:\s+)(\([a-z]{1,4}\)\s)/gi;
-
-function splitInlineItems(text: string): string {
-  return text.replace(INLINE_ITEM_RE, ";\n$1");
-}
+import {
+  ART_RUN_RE,
+  EXTERNAL_CONTEXT_RE,
+  GRID_ITEM_RE,
+  ROMAN_ITEM_RE,
+  NUMBERED_PARA_RE,
+  INLINE_ITEM_RE,
+  splitInlineItems,
+  parseTextRuns,
+  type ParsedRun,
+} from "@/lib/legal-text-parser";
 
 interface ProvisionTextProps {
   text: string;
   onArticleRef: (articleId: string) => void;
 }
 
-function parseRefs(text: string, onArticleRef: (id: string) => void): ReactNode[] {
-  const parts: ReactNode[] = [];
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  ART_RUN_RE.lastIndex = 0;
-  while ((match = ART_RUN_RE.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push(text.slice(lastIndex, match.index));
+function renderRuns(runs: ParsedRun[], onArticleRef: (id: string) => void): ReactNode[] {
+  return runs.map((run, i) => {
+    if (run.kind === "article") {
+      return (
+        <button
+          key={`art-${run.num}-${i}`}
+          onClick={() => onArticleRef(run.num)}
+          className="text-[#003399] hover:text-[#002277] hover:underline font-medium cursor-pointer"
+        >
+          {run.num}
+        </button>
+      );
     }
-    const [fullMatch, word, body] = match;
-    const textAfter = text.slice(match.index + fullMatch.length);
-
-    // If the run is followed by "of Regulation/Directive/...", the whole run is an external ref
-    if (EXTERNAL_CONTEXT_RE.test(textAfter)) {
-      parts.push(fullMatch);
-    } else {
-      // Emit the keyword as plain text, then linkify each number in the run
-      parts.push(`${word} `);
-      const numRe = /\d[\w]*/g;
-      let numMatch: RegExpExecArray | null;
-      let bodyLastIndex = 0;
-      while ((numMatch = numRe.exec(body)) !== null) {
-        if (numMatch.index > bodyLastIndex) {
-          parts.push(body.slice(bodyLastIndex, numMatch.index));
-        }
-        const num = numMatch[0];
-        parts.push(
-          <button
-            key={`art-${num}-${match.index}-${numMatch.index}`}
-            onClick={() => onArticleRef(num)}
-            className="text-[#003399] hover:text-[#002277] hover:underline font-medium cursor-pointer"
-          >
-            {num}
-          </button>
-        );
-        bodyLastIndex = numMatch.index + num.length;
-      }
-      if (bodyLastIndex < body.length) {
-        parts.push(body.slice(bodyLastIndex));
-      }
-    }
-    lastIndex = match.index + fullMatch.length;
-  }
-
-  if (lastIndex < text.length) {
-    parts.push(text.slice(lastIndex));
-  }
-
-  return parts;
+    return run.value;
+  });
 }
 
 export default function ProvisionText({ text, onArticleRef }: ProvisionTextProps) {
@@ -108,7 +60,7 @@ export default function ProvisionText({ text, onArticleRef }: ProvisionTextProps
                     key={li}
                     className="ml-10 pl-4 border-l-2 border-slate-200 py-0.5 text-slate-600"
                   >
-                    {parseRefs(trimmed, onArticleRef)}
+                    {renderRuns(parseTextRuns(trimmed), onArticleRef)}
                   </div>
                 );
               }
@@ -120,7 +72,7 @@ export default function ProvisionText({ text, onArticleRef }: ProvisionTextProps
                     key={li}
                     className="ml-5 pl-4 border-l-2 border-slate-200 py-0.5 text-slate-600"
                   >
-                    {parseRefs(trimmed, onArticleRef)}
+                    {renderRuns(parseTextRuns(trimmed), onArticleRef)}
                   </div>
                 );
               }
@@ -133,12 +85,12 @@ export default function ProvisionText({ text, onArticleRef }: ProvisionTextProps
                 return (
                   <p key={li}>
                     <span className="font-semibold text-slate-800 mr-1.5">{numLabel}</span>
-                    {body ? parseRefs(body, onArticleRef) : null}
+                    {body ? renderRuns(parseTextRuns(body), onArticleRef) : null}
                   </p>
                 );
               }
 
-              return <p key={li}>{parseRefs(trimmed, onArticleRef)}</p>;
+              return <p key={li}>{renderRuns(parseTextRuns(trimmed), onArticleRef)}</p>;
             })}
           </div>
         );

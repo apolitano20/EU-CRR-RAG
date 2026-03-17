@@ -31,5 +31,6 @@ export interface ArticleResponse {
   chapter?: string;
   section?: string;
   referenced_articles: string[];
+  referenced_external?: string[];
   language: string;
 }

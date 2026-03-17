@@ -707,6 +707,78 @@ class TestLoadRealHtmlEN:
         assert isinstance(refs, str)
 
 
+# ---------------------------------------------------------------------------
+# Task 1 — Lettered article handling (92a / 92b)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestLetteredArticleHandling:
+    def test_lettered_article_metadata_from_div_id(self):
+        """<div id="art_92a"> → metadata article='92a', node_id='art_92a_en'."""
+        html = """
+        <html><body>
+          <div id="prt_ONE.tis_I.cpt_1.sct_1">
+            <div id="art_92a">
+              <div class="eli-title">
+                <p class="stitle-article-norm">Own funds requirements — special</p>
+              </div>
+              <p>Paragraph text of Article 92a.</p>
+            </div>
+          </div>
+        </body></html>
+        """
+        docs = ingester("en")._parse_with_beautifulsoup(html)
+        assert len(docs) == 1
+        assert docs[0].metadata["article"] == "92a"
+        assert docs[0].metadata["node_id"] == "art_92a_en"
+
+    def test_lettered_article_92b_metadata(self):
+        """<div id="art_92b"> → metadata article='92b', node_id='art_92b_en'."""
+        html = """
+        <html><body>
+          <div id="art_92b">
+            <div class="eli-title">
+              <p class="stitle-article-norm">Own funds requirements — other</p>
+            </div>
+            <p>Paragraph text of Article 92b.</p>
+          </div>
+        </body></html>
+        """
+        docs = ingester("en")._parse_with_beautifulsoup(html)
+        assert len(docs) == 1
+        assert docs[0].metadata["article"] == "92b"
+        assert docs[0].metadata["node_id"] == "art_92b_en"
+
+
+# ---------------------------------------------------------------------------
+# Task 2 — Corpus deduplication
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestCorpusDedup:
+    def test_duplicate_div_ids_produce_single_document(self):
+        """HTML with two identical <div id="art_1"> → only one document returned."""
+        html = """
+        <html><body>
+          <div id="art_1"><p>First occurrence of Article 1.</p></div>
+          <div id="art_1"><p>Duplicate occurrence of Article 1.</p></div>
+        </body></html>
+        """
+        docs = ingester("en")._parse_with_beautifulsoup(html)
+        assert len(docs) == 1
+
+    def test_distinct_documents_not_deduped(self):
+        """HTML with <div id="art_1"> and <div id="art_2"> → both documents kept."""
+        html = """
+        <html><body>
+          <div id="art_1"><p>Article 1 text here.</p></div>
+          <div id="art_2"><p>Article 2 text here.</p></div>
+        </body></html>
+        """
+        docs = ingester("en")._parse_with_beautifulsoup(html)
+        assert len(docs) == 2
+
+
 @pytest.mark.unit
 @pytest.mark.requires_html
 class TestLoadRealHtmlIT:

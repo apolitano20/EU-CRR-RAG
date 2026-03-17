@@ -195,7 +195,19 @@ class EurLexIngester:
         else:
             logger.info("BeautifulSoup produced %d document chunks.", len(documents))
 
-        return documents
+        # Deduplicate by node_id (deterministic primary key: div ID + language)
+        seen_node_ids: set[str] = set()
+        deduped: list[Document] = []
+        for doc in documents:
+            nid = doc.metadata.get("node_id", "")
+            if nid in seen_node_ids:
+                logger.warning("Skipping duplicate document: node_id=%s", nid)
+                continue
+            seen_node_ids.add(nid)
+            deduped.append(doc)
+        if len(deduped) < len(documents):
+            logger.info("Deduplication removed %d document(s).", len(documents) - len(deduped))
+        return deduped
 
     # ------------------------------------------------------------------
     # Article processing

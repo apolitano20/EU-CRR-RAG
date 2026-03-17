@@ -159,6 +159,12 @@ class TestDirectArticleLookup:
         """'Articles 89 to 91' phrasing — bare run after initial ref."""
         assert _detect_direct_article_lookup("See Articles 89 and 90 for details") is None
 
+    def test_lettered_article_direct_lookup(self):
+        assert _detect_direct_article_lookup("What does Article 92a require?") == "92a"
+
+    def test_lettered_article_92b_direct_lookup(self):
+        assert _detect_direct_article_lookup("Summarise Article 92b") == "92b"
+
 
 class TestExpandArticleRanges:
     """Fix 4b: _expand_article_ranges expands 'Articles N to M' in query strings."""

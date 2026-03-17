@@ -38,6 +38,7 @@ RERANK_TOP_N = 6           # final results after reranking
 SIMILARITY_CUTOFF = 0.3
 RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
 LLM_MODEL = "gpt-4o"
+RETRIEVAL_ALPHA: float = float(os.getenv("RETRIEVAL_ALPHA", "0.5"))
 
 _LEGAL_QA_TEMPLATE = PromptTemplate(
     "You are a regulatory compliance expert specialising in EU prudential banking regulation "
@@ -511,6 +512,8 @@ class QueryEngine:
         meta = nodes[0].node.metadata
         ref_csv: str = meta.get("referenced_articles", "") or ""
         referenced_articles = [r.strip() for r in ref_csv.split(",") if r.strip()]
+        ext_csv: str = meta.get("referenced_external", "") or ""
+        referenced_external = [r.strip() for r in ext_csv.split(",") if r.strip()]
 
         return {
             "article": article_num,
@@ -521,6 +524,7 @@ class QueryEngine:
             "chapter": meta.get("chapter"),
             "section": meta.get("section"),
             "referenced_articles": referenced_articles,
+            "referenced_external": referenced_external,
             "language": meta.get("language") or language or "en",
         }
 
@@ -621,6 +625,7 @@ class QueryEngine:
                     similarity_top_k=top_k,
                     vector_store_query_mode=mode,
                     filters=filters,
+                    alpha=RETRIEVAL_ALPHA,
                 )
                 results = retriever.retrieve(query_str)
             except Exception as exc:
@@ -665,6 +670,7 @@ class QueryEngine:
             similarity_top_k=RETRIEVAL_TOP_K,
             vector_store_query_mode=VectorStoreQueryMode.HYBRID,
             filters=filters,
+            alpha=RETRIEVAL_ALPHA,
         )
 
         synthesizer = get_response_synthesizer(

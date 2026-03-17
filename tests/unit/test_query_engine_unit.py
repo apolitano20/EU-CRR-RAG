@@ -64,7 +64,7 @@ class TestRetrieveWithFilters:
         qe._vector_index = MagicMock()
 
         # Configure as_retriever to return different results per mode
-        def _as_retriever(similarity_top_k, vector_store_query_mode, filters):
+        def _as_retriever(similarity_top_k, vector_store_query_mode, filters, **kwargs):
             retriever = MagicMock()
             if vector_store_query_mode == VectorStoreQueryMode.HYBRID:
                 retriever.retrieve.return_value = hybrid_results
@@ -108,7 +108,7 @@ class TestRetrieveWithFilters:
 
         call_count = {"n": 0}
 
-        def _as_retriever(similarity_top_k, vector_store_query_mode, filters):
+        def _as_retriever(similarity_top_k, vector_store_query_mode, filters, **kwargs):
             retriever = MagicMock()
             if vector_store_query_mode == VectorStoreQueryMode.HYBRID:
                 retriever.retrieve.side_effect = RuntimeError("Qdrant sparse error")
@@ -473,3 +473,111 @@ class TestExpandCrossReferencesAnnex:
         ]
         fetched_order = [q.split()[1] for q in annex_calls]
         assert fetched_order == ["I", "II", "IV"]
+
+
+# ---------------------------------------------------------------------------
+# Task 3 — get_article returns referenced_external
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestGetArticleReferencedExternal:
+    def _engine_with_metadata(self, metadata: dict):
+        """Build a QueryEngine whose _retrieve_with_filters returns one node with given metadata."""
+        from src.query.query_engine import QueryEngine
+        from src.indexing.index_builder import HierarchicalIndexer
+        from src.indexing.vector_store import VectorStore
+
+        vs = MagicMock(spec=VectorStore)
+        idx = MagicMock(spec=HierarchicalIndexer)
+        qe = QueryEngine.__new__(QueryEngine)
+        qe.vector_store = vs
+        qe.indexer = idx
+        qe._vector_index = MagicMock()
+
+        node = _make_node("art_92_en", "92")
+        node.node.metadata = metadata
+        node.node.get_content.return_value = "content"
+
+        qe._retrieve_with_filters = MagicMock(return_value=[node])
+        return qe
+
+    def test_get_article_returns_referenced_external_list(self):
+        """CSV 'Directive 2013/36/EU,Regulation (EU) No 648/2012' → list of 2 strings."""
+        meta = {
+            "article": "92",
+            "article_title": "Own funds requirements",
+            "referenced_articles": "",
+            "referenced_external": "Directive 2013/36/EU,Regulation (EU) No 648/2012",
+            "language": "en",
+        }
+        qe = self._engine_with_metadata(meta)
+        result = qe.get_article("92")
+        assert result is not None
+        assert result["referenced_external"] == [
+            "Directive 2013/36/EU",
+            "Regulation (EU) No 648/2012",
+        ]
+
+    def test_get_article_referenced_external_empty_when_absent(self):
+        """Missing referenced_external key → empty list."""
+        meta = {
+            "article": "92",
+            "article_title": "Own funds requirements",
+            "referenced_articles": "",
+            "language": "en",
+        }
+        qe = self._engine_with_metadata(meta)
+        result = qe.get_article("92")
+        assert result is not None
+        assert result["referenced_external"] == []
+
+
+# ---------------------------------------------------------------------------
+# Task 4 — RETRIEVAL_ALPHA is passed as kwarg to as_retriever
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestRetrievalAlpha:
+    def _minimal_engine(self):
+        from src.query.query_engine import QueryEngine
+        from src.indexing.index_builder import HierarchicalIndexer
+        from src.indexing.vector_store import VectorStore
+
+        vs = MagicMock(spec=VectorStore)
+        idx = MagicMock(spec=HierarchicalIndexer)
+        qe = QueryEngine.__new__(QueryEngine)
+        qe.vector_store = vs
+        qe.indexer = idx
+        qe._reranker = None
+        qe._vector_index = MagicMock()
+        return qe
+
+    def test_alpha_kwarg_passed_to_as_retriever_in_build_engine(self, monkeypatch):
+        """_build_engine passes alpha=RETRIEVAL_ALPHA to as_retriever."""
+        import src.query.query_engine as qe_module
+        monkeypatch.setattr(qe_module, "RETRIEVAL_ALPHA", 0.7)
+
+        qe = self._minimal_engine()
+        qe._build_engine(qe._vector_index)
+
+        call_kwargs = qe._vector_index.as_retriever.call_args[1]
+        assert call_kwargs.get("alpha") == 0.7
+
+    def test_alpha_kwarg_passed_in_retrieve_with_filters(self, monkeypatch):
+        """_retrieve_with_filters passes alpha=RETRIEVAL_ALPHA to as_retriever."""
+        import src.query.query_engine as qe_module
+        monkeypatch.setattr(qe_module, "RETRIEVAL_ALPHA", 0.3)
+
+        qe = self._minimal_engine()
+        node = _make_node("art_4_en", "4")
+        qe._vector_index.as_retriever.return_value.retrieve.return_value = [node]
+
+        from llama_index.core.vector_stores.types import MetadataFilters
+        qe._retrieve_with_filters(
+            filters=MetadataFilters(filters=[]),
+            query_str="Article 4",
+            top_k=5,
+        )
+
+        call_kwargs = qe._vector_index.as_retriever.call_args[1]
+        assert call_kwargs.get("alpha") == 0.3

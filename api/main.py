@@ -134,6 +134,7 @@ class ArticleResponse(BaseModel):
     chapter: Optional[str] = None
     section: Optional[str] = None
     referenced_articles: list[str]
+    referenced_external: list[str] = []
     language: str
 
 

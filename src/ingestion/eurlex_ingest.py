@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import uuid
 from typing import Optional
 
 import requests
@@ -22,6 +23,19 @@ from src.ingestion.language_config import LanguageConfig, get_config
 from src.models.document import DocumentNode, NodeLevel
 
 logger = logging.getLogger(__name__)
+
+# Stable namespace for deterministic UUID generation from node_id strings.
+# Qdrant only accepts unsigned integers or UUIDs as point IDs.
+_NODE_ID_NAMESPACE = uuid.UUID("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
+
+
+def _node_id_to_uuid(node_id: str) -> str:
+    """Convert a human-readable node_id (e.g. 'art_92_en') to a deterministic UUID.
+
+    uuid5 is SHA-1 based and produces the same UUID for the same input every time,
+    making Qdrant upserts idempotent across re-runs without --reset.
+    """
+    return str(uuid.uuid5(_NODE_ID_NAMESPACE, node_id))
 
 
 # Language-specific patterns for external legislative references.
@@ -235,7 +249,7 @@ class EurLexIngester:
         )
         meta = node.to_metadata()
         meta["language"] = self.language
-        return Document(text=text, metadata=meta, id_=node.node_id)
+        return Document(text=text, metadata=meta, id_=_node_id_to_uuid(node.node_id))
 
     # ------------------------------------------------------------------
     # Annex processing
@@ -263,7 +277,7 @@ class EurLexIngester:
         )
         meta = node.to_metadata()
         meta["language"] = self.language
-        return Document(text=text, metadata=meta, id_=node.node_id)
+        return Document(text=text, metadata=meta, id_=_node_id_to_uuid(node.node_id))
 
     # ------------------------------------------------------------------
     # Structured text extraction

@@ -311,6 +311,104 @@ def eurlex_html_with_amendment_blocks() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Fixtures for indexer chunking regression tests
+# ---------------------------------------------------------------------------
+
+# Rough token count reference: 1 token ≈ 4 chars.  The old LlamaIndex default
+# chunk_size was 1024 tokens ≈ 4096 chars.  The long-article fixture below
+# uses ~5500 chars so it would have been split by the old default SentenceSplitter
+# but must NOT be split after the Settings.transformations = [] fix.
+_LONG_PARAGRAPH = (
+    "Institutions shall, for the purposes of calculating the own funds requirements "
+    "for credit risk under this Part, apply the standardised approach set out in "
+    "Chapter 2 or, where permitted by the competent authorities in accordance with "
+    "Article 143, the IRB approach set out in Chapter 3. "
+    "For trade exposures and default fund contributions to a CCP, institutions shall "
+    "apply the treatment set out in Chapter 6, Section 9. "
+    "Institutions shall apply the treatment set out in Chapter 5 for securitisation "
+    "positions unless the competent authority has decided in accordance with Article 269 "
+    "that an institution is not obliged to apply the treatment under that Chapter. "
+    "Institutions shall report to their competent authority the different approaches "
+    "they use for calculating own-funds requirements and provide evidence that the "
+    "criteria for using such approaches are satisfied. "
+)
+
+# Repeat enough times to exceed 1024-token default chunk_size (~5500 chars total)
+_LONG_ARTICLE_TEXT = " ".join([_LONG_PARAGRAPH] * 8)
+
+
+@pytest.fixture
+def eurlex_html_long_article() -> str:
+    """HTML with one article whose text exceeds ~1024 tokens (the old SentenceSplitter default).
+
+    Used to verify that the indexer does not split this into multiple nodes.
+    With the old bug (Settings.transformations falling through to [SentenceSplitter]),
+    this article would be split into 2+ chunks.  With the fix it must remain 1 document.
+    """
+    return _make_article_html([
+        {
+            "num": "92",
+            "parent_id": "prt_THREE.tis_I.cpt_1",
+            "article_title": "Own funds requirements",
+            "paragraphs": [_LONG_ARTICLE_TEXT],
+        },
+    ])
+
+
+@pytest.fixture
+def eurlex_html_part_three_title_i() -> str:
+    """Minimal 'Part Three, Title I, Chapter 1' HTML with five articles.
+
+    Mirrors the real CRR structure (Articles 92–96) used to test that parser
+    document count == indexer node count (no extra chunking introduced).
+    Three articles have normal-length text; two have long text exceeding the
+    old 1024-token default.
+    """
+    return _make_article_html([
+        {
+            "num": "92",
+            "parent_id": "prt_THREE.tis_I.cpt_1.sct_1",
+            "article_title": "Own funds requirements",
+            "paragraphs": [_LONG_ARTICLE_TEXT],  # long — would be split by old default
+        },
+        {
+            "num": "93",
+            "parent_id": "prt_THREE.tis_I.cpt_1.sct_1",
+            "article_title": "Transitional provisions for own funds requirements",
+            "paragraphs": [
+                "Institutions shall apply the transitional provisions set out in this Article.",
+                "Competent authorities may require institutions to apply stricter measures.",
+            ],
+        },
+        {
+            "num": "94",
+            "parent_id": "prt_THREE.tis_I.cpt_1.sct_1",
+            "article_title": "Derogation for small trading book business",
+            "paragraphs": [_LONG_ARTICLE_TEXT],  # long — would be split by old default
+        },
+        {
+            "num": "95",
+            "parent_id": "prt_THREE.tis_I.cpt_1.sct_1",
+            "article_title": "Derogation for small trading book business for small institutions",
+            "paragraphs": [
+                "Institutions that meet the conditions in Article 94 may apply the "
+                "derogation set out in that Article to their entire trading book.",
+            ],
+        },
+        {
+            "num": "96",
+            "parent_id": "prt_THREE.tis_I.cpt_1.sct_1",
+            "article_title": "Institutions with specific own funds requirements",
+            "paragraphs": [
+                "An institution that uses an internal model for position risk with the "
+                "permission of the competent authority may use that model subject to "
+                "the conditions set out in Article 363.",
+            ],
+        },
+    ])
+
+
+# ---------------------------------------------------------------------------
 # Paths to real HTML files (may not exist on CI)
 # ---------------------------------------------------------------------------
 

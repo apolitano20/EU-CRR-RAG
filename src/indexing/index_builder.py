@@ -49,7 +49,7 @@ class HierarchicalIndexer:
             documents,
             storage_context=storage_context,
             show_progress=True,
-            transformations=[],  # disable default SentenceSplitter — each Document is already one article
+            transformations=[],  # belt-and-suspenders; Settings.transformations=[] is the real guard ([] is falsy so this alone wouldn't work)
         )
         logger.info("Vector index built with %d items.", self.vector_store.item_count)
         return self._vector_index
@@ -72,7 +72,11 @@ class HierarchicalIndexer:
         Settings.embed_model = BGEm3Embedding()
         Settings.llm = None  # LLM is set per-query in QueryEngine
         # Prevent LlamaIndex from chunking article-level documents.
-        # transformations=[] in build() handles new ingests, but Settings
-        # chunk_size/overlap are also consulted by some LlamaIndex code paths.
+        # IMPORTANT: `transformations=[]` passed to from_documents() is falsy in Python,
+        # so `transformations or Settings.transformations` falls through to the default
+        # pipeline which contains SentenceSplitter. Setting Settings.transformations=[]
+        # here ensures the fallback is also empty. Embedding still happens in
+        # _add_nodes_to_index → _get_node_with_embedding (not in the transformations pipeline).
+        Settings.transformations = []
         Settings.chunk_size = 8192
         Settings.chunk_overlap = 0

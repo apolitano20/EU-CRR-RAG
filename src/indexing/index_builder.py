@@ -25,22 +25,23 @@ def _settings_scope():
     chunk_size, chunk_overlap) from leaking into other components that share the
     same process — e.g. QueryEngine, which needs Settings.llm = OpenAI(...).
     """
-    # Read private backing attributes directly to avoid triggering the lazy
-    # resolvers on Settings.embed_model / Settings.llm (they try to import
-    # llama-index-embeddings-openai which may not be installed).
+    # The embed_model, llm, and transformations properties have lazy resolvers
+    # that try to import llama-index-embeddings-openai (not installed in Colab).
+    # Read their private backing attrs directly via getattr to bypass the resolvers.
+    # chunk_size and chunk_overlap are plain numeric properties with no resolver.
     prev = dict(
-        embed_model=Settings._embed_model,
-        llm=Settings._llm,
-        transformations=list(Settings.transformations),
+        embed_model=getattr(Settings, "_embed_model", None),
+        llm=getattr(Settings, "_llm", None),
+        transformations=getattr(Settings, "_transformations", None),
         chunk_size=Settings.chunk_size,
         chunk_overlap=Settings.chunk_overlap,
     )
     try:
         yield
     finally:
-        Settings.embed_model = prev["embed_model"]
-        Settings.llm = prev["llm"]
-        Settings.transformations = prev["transformations"]
+        Settings._embed_model = prev["embed_model"]
+        Settings._llm = prev["llm"]
+        Settings._transformations = prev["transformations"]
         Settings.chunk_size = prev["chunk_size"]
         Settings.chunk_overlap = prev["chunk_overlap"]
 

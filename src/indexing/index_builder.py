@@ -25,25 +25,31 @@ def _settings_scope():
     chunk_size, chunk_overlap) from leaking into other components that share the
     same process — e.g. QueryEngine, which needs Settings.llm = OpenAI(...).
     """
-    # The embed_model, llm, and transformations properties have lazy resolvers
-    # that try to import llama-index-embeddings-openai (not installed in Colab).
-    # Read their private backing attrs directly via getattr to bypass the resolvers.
-    # chunk_size and chunk_overlap are plain numeric properties with no resolver.
-    prev = dict(
-        embed_model=getattr(Settings, "_embed_model", None),
-        llm=getattr(Settings, "_llm", None),
-        transformations=getattr(Settings, "_transformations", None),
-        chunk_size=Settings.chunk_size,
-        chunk_overlap=Settings.chunk_overlap,
-    )
+    # embed_model / llm / transformations have lazy resolvers that try to import
+    # llama-index-embeddings-openai (not installed in Colab) — bypass via getattr.
+    # chunk_size / chunk_overlap: safe in most versions, but some LlamaIndex builds
+    # delegate these to node_parser which in turn calls embed_model. Guard with a
+    # sentinel so the finally block skips restoration when the read itself fails.
+    _UNSET = object()
+    prev_embed = getattr(Settings, "_embed_model", None)
+    prev_llm = getattr(Settings, "_llm", None)
+    prev_transforms = getattr(Settings, "_transformations", None)
+    try:
+        prev_chunk_size: object = Settings.chunk_size
+        prev_chunk_overlap: object = Settings.chunk_overlap
+    except Exception:
+        prev_chunk_size = _UNSET
+        prev_chunk_overlap = _UNSET
     try:
         yield
     finally:
-        Settings._embed_model = prev["embed_model"]
-        Settings._llm = prev["llm"]
-        Settings._transformations = prev["transformations"]
-        Settings.chunk_size = prev["chunk_size"]
-        Settings.chunk_overlap = prev["chunk_overlap"]
+        Settings._embed_model = prev_embed
+        Settings._llm = prev_llm
+        Settings._transformations = prev_transforms
+        if prev_chunk_size is not _UNSET:
+            Settings.chunk_size = prev_chunk_size  # type: ignore[assignment]
+        if prev_chunk_overlap is not _UNSET:
+            Settings.chunk_overlap = prev_chunk_overlap  # type: ignore[assignment]
 
 
 class HierarchicalIndexer:

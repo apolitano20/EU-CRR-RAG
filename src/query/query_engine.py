@@ -270,6 +270,50 @@ def _normalise_query(query: str) -> str:
     return query
 
 
+_DEF_QUERY_RE = re.compile(
+    r"""
+    (?:
+        (?:what\s+(?:is|are)\s+(?:(?:a|an|the)\s+)?(?:definition\s+of\s+)?|
+           what\s+does\s+|
+           define\s+|
+           definition\s+of\s+|
+           meaning\s+of\s+)
+        (['\u2018\u2019\u201c\u201d]?[a-zA-Z][\w\s\-]*?)  # group 1: term
+        (?:\s+mean(?:s|ing)?|\?|$)
+    |
+        article\s+4\s*\(\s*(\d+[a-z]?)\s*\)  # group 2: definition number
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _detect_definition_query(query: str) -> Optional[str]:
+    """Return '#N' for Article 4(N) lookups, a lowercase term string, or None."""
+    m = _DEF_QUERY_RE.search(query)
+    if m is None:
+        return None
+    if m.group(2):
+        return f"#{m.group(2)}"
+    term = (m.group(1) or "").strip().lower().strip("'\u2018\u2019\u201c\u201d").rstrip("?")
+    if not term:
+        return None
+    # Reject false positives where "what is/are X" captured a long phrase
+    # (real definition terms are at most 4 words)
+    if len(term.split()) > 4:
+        return None
+    return term
+
+
+def _art4_source(lang: str, entry: Optional[dict] = None) -> dict:
+    return {
+        "text": (entry["text"] if entry else "Article 4 — Definitions")[:500],
+        "score": 1.0,
+        "metadata": {"article": "4", "article_title": "Definitions", "language": lang},
+        "expanded": False,
+    }
+
+
 def _detect_direct_article_lookup(query: str) -> Optional[str]:
     """Return article number if the query references exactly one CRR article, else None.
 
@@ -328,6 +372,7 @@ class QueryEngine:
         self._engine_cache: dict[str, RetrieverQueryEngine] = {}
         self._engine_cache_lock = threading.Lock()
         self._reranker = None
+        self._defs: Optional[object] = None  # DefinitionsStore, imported lazily
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -344,6 +389,18 @@ class QueryEngine:
         self._engine = self._build_engine(self._vector_index)
         with self._engine_cache_lock:
             self._engine_cache = {}
+
+        # Load Article 4 definitions fast-path store
+        from src.query.definitions_store import DefinitionsStore
+        self._defs = DefinitionsStore(self.vector_store)
+        for lang in ("en", "it"):
+            try:
+                self._defs.load(lang)
+            except Exception as exc:
+                logger.warning(
+                    "DefinitionsStore load failed for language=%s: %s", lang, exc
+                )
+
         logger.info("QueryEngine ready.")
 
     def is_loaded(self) -> bool:
@@ -474,6 +531,12 @@ class QueryEngine:
         else:
             effective_query = user_query
 
+        # Stage 0.5: Article 4 / definition fast-path — bypass RAG entirely
+        if not history:
+            def_result = self.lookup_definition(effective_query, language)
+            if def_result is not None:
+                return def_result
+
         all_nodes_for_synthesis, sources, trace_id, normalised_query, _engine = self.retrieve(
             effective_query, language, max_cross_ref_expansions
         )
@@ -519,6 +582,54 @@ class QueryEngine:
         )
 
         return QueryResult(answer=answer, sources=sources, trace_id=trace_id)
+
+    # ------------------------------------------------------------------
+    # Definitions fast-path
+    # ------------------------------------------------------------------
+
+    def lookup_definition(
+        self, query: str, language: Optional[str] = None
+    ) -> Optional[QueryResult]:
+        """Return a QueryResult for Article 4 definition queries, or None to fall through to RAG.
+
+        Handles:
+        - Specific term queries: "What is the definition of institution?"
+        - Article 4(N) direct lookups: "Article 4(1)"
+        - Generic Article 4 queries: "Explain Article 4"
+        """
+        if self._defs is None:
+            return None
+        lang = language or "en"
+        norm = _normalise_query(query)
+        signal = _detect_definition_query(norm)
+
+        # Generic Article 4 query (e.g. "Explain Article 4", "What is Article 4?")
+        if signal is None:
+            if _detect_direct_article_lookup(norm) == "4":
+                if self._defs.is_loaded(lang):
+                    answer = self._defs.summary(lang)
+                    return QueryResult(answer=answer, sources=[_art4_source(lang)])
+            return None
+
+        # Specific definition lookup
+        entry = None
+        if signal.startswith("#"):
+            entry = self._defs.lookup_by_number(signal[1:], lang)
+            if entry is None and lang != "en":
+                entry = self._defs.lookup_by_number(signal[1:], "en")
+        else:
+            entry = self._defs.lookup_by_term(signal, lang)
+            if entry is None and lang != "en":
+                entry = self._defs.lookup_by_term(signal, "en")
+
+        if entry is None:
+            return None  # fall through to RAG
+
+        answer = (
+            f"**Article 4({entry['number']}) — Definition of '{entry['term']}'**\n\n"
+            f"{entry['text']}"
+        )
+        return QueryResult(answer=answer, sources=[_art4_source(lang, entry)])
 
     # ------------------------------------------------------------------
     # Cross-reference expansion
@@ -573,6 +684,12 @@ class QueryEngine:
         for ref_art in candidates:
             if len(expanded) >= limit:
                 break
+            if ref_art == "4":
+                _seen.add("4")
+                logger.debug(
+                    "Cross-ref expansion: skipping Article 4 (definitions glossary)"
+                )
+                continue
             try:
                 filters_list = [
                     MetadataFilter(key="article", value=ref_art, operator=FilterOperator.EQ),

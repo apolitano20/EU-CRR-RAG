@@ -4,7 +4,15 @@ For completed work history, see `COMPLETED.md`.
 
 ---
 
-## Current State (as of 2026-03-18) ✅ CLEAN INDEX — 1490 items (745 EN + 745 IT) | 235 unit tests green
+## Current State (as of 2026-03-18) ✅ CLEAN INDEX — 1490 items (745 EN + 745 IT) | 315 unit tests green
+
+### Article 4 Definitions Store (2026-03-18)
+- Added `src/query/definitions_store.py`: `DefinitionsStore` class parses Article 4 into structured JSON index
+- Fast-path routing in `QueryEngine.query()` and `/api/query/stream` — definition queries never touch RAG or LLM
+- Article 4 is now skipped in `_expand_cross_references()` — prevents 429 rate-limit errors from token overflow
+- Bootstrap script: `scripts/build_definitions.py` — run once against live Qdrant to generate `definitions/definitions_{en,it}.json`
+- 36 new unit tests in `tests/unit/test_definitions_store.py`
+- **To activate**: run `python scripts/build_definitions.py` with live Qdrant to build the JSON cache
 
 Qdrant collection rebuilt clean on 2026-03-18 via Colab T4 (re-ingest with `--reset` after Codex V2 fixes).
 Smoke test passed — Article 92 query returns correct answer with proper citations.

@@ -232,6 +232,13 @@ def query(request: QueryRequest) -> QueryResponse:
     )
 
 
+async def _stream_definition_result(result: QueryResult, lang: Optional[str]):
+    """Yield SSE events for a pre-resolved definition result (no LLM call needed)."""
+    yield f"data: {json.dumps({'type': 'token', 'content': result.answer})}\n\n"
+    yield f"data: {json.dumps({'type': 'sources', 'sources': result.sources, 'trace_id': result.trace_id, 'language': lang})}\n\n"
+    yield 'data: {"type": "done"}\n\n'
+
+
 @app.post("/api/query/stream")
 async def query_stream(request: QueryRequest) -> StreamingResponse:
     if not _query_engine.is_loaded():
@@ -250,6 +257,18 @@ async def query_stream(request: QueryRequest) -> StreamingResponse:
         )
         if effective_query != request.query:
             logger.info("Stream query rewritten: '%s' → '%s'", request.query, effective_query)
+
+    # Definitions fast-path — skip retrieval and LLM for Article 4 queries
+    if not history_dicts:
+        def_result = await asyncio.to_thread(
+            _query_engine.lookup_definition, effective_query, lang
+        )
+        if def_result is not None:
+            return StreamingResponse(
+                _stream_definition_result(def_result, lang),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
 
     # Run synchronous retrieval in a thread to avoid blocking the event loop
     all_nodes, sources, trace_id, normalised_query, _engine = await asyncio.to_thread(

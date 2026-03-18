@@ -158,6 +158,7 @@ class TestSynthesisNodeMerging:
         qe._vector_index = MagicMock()
         qe._engine_cache = {}
         qe._engine_cache_lock = __import__("threading").Lock()
+        qe._defs = None  # definitions fast-path disabled in unit tests
         return qe
 
     def _mock_openai(self, answer="answer"):
@@ -379,14 +380,15 @@ class TestExpandCrossReferences:
         return qe, [source]
 
     def test_refs_fetched_in_numeric_order(self):
-        """References must be fetched in ascending numeric order, not hash order."""
+        """References must be fetched in ascending numeric order; Article 4 is skipped."""
         qe, source_nodes = self._engine_with_refs("114,26,4")
         qe._expand_cross_references(source_nodes, language=None, limit=3)
 
         call_args = [call[1]["query_str"] for call in qe._retrieve_with_filters.call_args_list]
         fetched_articles = [q.split()[-1] for q in call_args]
-        assert fetched_articles == ["4", "26", "114"], (
-            f"Expected numeric order [4, 26, 114] but got {fetched_articles}"
+        # Article 4 is skipped by the definitions fast-path guard
+        assert fetched_articles == ["26", "114"], (
+            f"Expected numeric order [26, 114] (Article 4 skipped) but got {fetched_articles}"
         )
 
     def test_cap_not_consumed_by_failed_fetch(self):

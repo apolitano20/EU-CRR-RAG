@@ -53,7 +53,7 @@ export default function AnswerCard({ answer, sources, queryLanguage, onSourceCli
     const sourcesMarkdown = sources
       .map((s) => `- **${s.metadata.article || "unknown"}** (score: ${s.score.toFixed(3)})`)
       .join("\n");
-    const md = `${answer}\n\n### Cross-References\n${sourcesMarkdown}`;
+    const md = `${answer}\n\n### Sources\n${sourcesMarkdown}`;
     await navigator.clipboard.writeText(md);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);

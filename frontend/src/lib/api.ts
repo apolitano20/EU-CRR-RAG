@@ -1,4 +1,4 @@
-import type { ArticleResponse, QueryResponse } from "./types";
+import type { ArticleResponse, QueryResponse, SourceNode } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -18,6 +18,25 @@ export async function postQuery(
     body: JSON.stringify({ query, preferred_language: language ?? null }),
   });
   if (!res.ok) throw new Error(`Query failed: ${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+export async function submitFeedback(payload: {
+  query: string;
+  answer: string;
+  feedback: string;
+  sources: SourceNode[];
+  viewed_article?: ArticleResponse | null;
+}): Promise<{ status: string; filename: string }> {
+  const res = await fetch(`${API_BASE}/api/feedback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ...payload,
+      viewed_article: payload.viewed_article ?? null,
+    }),
+  });
+  if (!res.ok) throw new Error(`Feedback submission failed: ${res.status}`);
   return res.json();
 }
 

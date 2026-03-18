@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { useQuery } from "@/hooks/useQuery";
 import QuestionInput from "./QuestionInput";
 import AnswerCard from "./AnswerCard";
+import FeedbackBox from "./FeedbackBox";
 import { getArticle, ArticleNotFoundError } from "@/lib/api";
 import type { ArticleResponse, QueryResponse } from "@/lib/types";
 
@@ -15,9 +16,10 @@ interface Message {
 interface ChatPanelProps {
   onArticleSelect: (article: ArticleResponse) => void;
   onArticleNotFound: (articleId: string) => void;
+  selectedArticle: ArticleResponse | null;
 }
 
-export default function ChatPanel({ onArticleSelect, onArticleNotFound }: ChatPanelProps) {
+export default function ChatPanel({ onArticleSelect, onArticleNotFound, selectedArticle }: ChatPanelProps) {
   const { isLoading, error, submitQuery } = useQuery();
   const [messages, setMessages] = useState<Message[]>([]);
   const [pendingQuestion, setPendingQuestion] = useState("");
@@ -82,6 +84,12 @@ export default function ChatPanel({ onArticleSelect, onArticleNotFound }: ChatPa
                 sources={msg.result.sources}
                 queryLanguage={msg.result.language ?? undefined}
                 onSourceClick={handleSourceClick}
+              />
+              <FeedbackBox
+                query={msg.question}
+                answer={msg.result.answer}
+                sources={msg.result.sources}
+                viewedArticle={selectedArticle}
               />
             </div>
           ))}

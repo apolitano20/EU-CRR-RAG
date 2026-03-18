@@ -51,6 +51,26 @@ Known design constraints to revisit as the project matures.
 
 ## High Priority
 
+### Conversational context / chat memory [High priority, Medium effort]
+
+Currently every query is stateless — follow-up questions like "and what about y?" are sent as standalone queries with no knowledge of the prior exchange, producing poor results.
+
+**Goal:** GPT-style continuous chat where follow-up questions are understood in context.
+
+**Recommended approach — query rewriting before retrieval:**
+1. **Frontend**: maintain conversation history (list of `{question, answer}` turns) and pass it alongside the new query in the request body.
+2. **API**: add optional `history` field to `QueryRequest`.
+3. **Backend (pre-retrieval)**: when history is present, call the LLM once to rewrite the follow-up into a fully self-contained query (e.g. "and what about y?" + prior context → "What are the CRR requirements for y, in the context of x?"). Then run normal retrieval on the rewritten query.
+4. **Backend (synthesis)**: inject the last N turns into the synthesis prompt so the LLM can reference prior answers when composing its response.
+
+Query rewriting is preferred over simply injecting history into retrieval because embedding quality degrades with conversational fragments — retrieval needs a well-formed standalone query.
+
+**Scope:**
+- Keep last N=5 turns (configurable) to avoid unbounded prompt growth.
+- Rewriting step only fires when history is non-empty and the query looks like a follow-up (short, starts with pronoun/conjunction, no article reference). Otherwise skip it to save latency.
+
+---
+
 ### Golden dataset [High effort]
 Curate 50–100 question/answer pairs for CRR covering: own funds, risk weights, leverage ratio, liquidity, large exposures, reporting. Each entry: `question`, `expected_articles`, `reference_answer`. Store as `evals/golden_dataset.jsonl`. Start with 20 high-value questions.
 
@@ -67,6 +87,33 @@ The current cross-reference system only handles **article-to-article** reference
 | 2 | **Range ref parsing for structural refs** | `Parts Two to Five` / `Titles I to III` not handled by regex. Article ranges are covered; structural ranges are not. | **Yes** (ingest regex) | High |
 
 **Operational note**: Both gaps require re-ingestion (metadata changes at parse time, no re-embedding needed — Qdrant supports payload updates).
+
+---
+
+## UI/UX — Eval Feedback (shipped 2026-03-18)
+
+### In-UI eval feedback capture ✅
+Added per-message feedback mechanism to support eval case collection without leaving the browser.
+
+**How it works:**
+- Each Q&A pair in `ChatPanel` shows an "Add eval feedback" toggle below the answer
+- Clicking it opens an amber-styled panel with a textarea and "Submit feedback" button
+- The panel shows which article is currently open in the DocumentViewer (auto-included on submit)
+- On submit: `POST /api/feedback` → backend writes `evals/cases/case_NNN.md`
+
+**What gets saved per case:**
+- Query asked
+- LLM-generated answer
+- Source articles with scores
+- Full text of the article currently open in the DocumentViewer (if any)
+- User's free-text feedback
+
+**Files changed:**
+- `api/main.py` — new `POST /api/feedback` endpoint + `FeedbackRequest`/`FeedbackResponse` models
+- `frontend/src/lib/api.ts` — `submitFeedback()` function
+- `frontend/src/components/chat/FeedbackBox.tsx` — new component
+- `frontend/src/components/chat/ChatPanel.tsx` — renders `FeedbackBox` per message, receives `selectedArticle` prop
+- `frontend/src/components/layout/AppLayout.tsx` — passes `selectedArticle` to `ChatPanel`
 
 ---
 
@@ -98,6 +145,23 @@ Leverage Claude's extended thinking API feature to improve synthesis quality for
 2. **Pre-retrieval query planning** — model reasons about which structural areas of the CRR to search before hitting Qdrant. Pairs naturally with ToC routing above.
 
 Detect query complexity and conditionally invoke extended thinking only for complex cases to manage latency and cost.
+
+---
+
+## Efficiency Improvements
+
+Bottleneck analysis (2026-03-18): main latency sources in order of impact.
+
+| # | Bottleneck | Current state | Improvement options | Effort |
+|---|------------|--------------|---------------------|--------|
+| 1 | **BGE-M3 CPU inference** | 570MB XLM-RoBERTa running on CPU; ~5–15s per query encoding | (a) **ONNX Runtime + INT8 quantization** — 2–4x speedup, same model, no GPU needed. (b) **Switch to `bge-small-en-v1.5`** (33MB) — much faster, some quality trade-off. (c) **GPU** — 10–50x if hardware available (code already has CUDA detection). | Medium |
+| 2 | **OpenAI GPT-4o synthesis** | Blocking call, 5–30s; user sees nothing until complete | (a) **Stream tokens to frontend** — same total latency, but user sees text appear immediately. (b) **Switch to GPT-4o-mini** — 3–5x faster, cheaper, minimal quality loss for structured Q&A with retrieved context. | Low–Medium |
+| 3 | **Qdrant cloud round-trips** | Multiple sequential calls per query (retrieval + cross-ref expansion); each ~1–3s network RTT | (a) **Local Qdrant** — eliminates network latency. (b) **Parallelise cross-ref expansion** — currently sequential; easy win with `ThreadPoolExecutor` or `asyncio.gather`. | Low |
+| 4 | **Cold-start (first query)** | BGE-M3 loads from disk on first query (~25s) | Solved by GPU / ONNX above. Pre-warming at startup is an option but risks OOM if a prior process still holds the model. | — |
+
+**Note:** C++/Rust rewrite is not the right lever here — PyTorch and the Qdrant client are already native C++/CUDA. Python overhead is negligible vs. model inference and network I/O.
+
+**Recommended sequence:** (1) stream GPT-4o → instant UX win, minimal work; (2) GPT-4o-mini → faster + cheaper; (3) ONNX INT8 for BGE-M3 → biggest raw speedup on CPU; (4) parallelise cross-ref expansion.
 
 ---
 

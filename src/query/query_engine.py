@@ -367,6 +367,15 @@ class QueryEngine:
             _seen = {node.node.metadata.get("article", "") for node in source_nodes
                      if node.node.metadata.get("article")}
 
+        # If no language filter was passed, infer from the majority language of the
+        # source nodes so cross-ref expansions stay language-consistent.
+        if language is None and source_nodes:
+            from collections import Counter
+            langs = [n.node.metadata.get("language") for n in source_nodes
+                     if n.node.metadata.get("language")]
+            if langs:
+                language = Counter(langs).most_common(1)[0][0]
+
         # Collect referenced articles from all source node metadata
         refs_to_fetch: set[str] = set()
         for node in source_nodes:
@@ -639,7 +648,7 @@ class QueryEngine:
 
     def _configure_settings(self) -> None:
         Settings.embed_model = BGEm3Embedding()
-        Settings.llm = OpenAI(model=self.llm_model, api_key=self.openai_api_key)
+        Settings.llm = OpenAI(model=self.llm_model, api_key=self.openai_api_key, timeout=120.0)
         # Invalidate any stale PromptHelper that was cached by a prior code path
         # (e.g. the indexer sets Settings.llm = None which creates a small context window).
         # Resetting to None forces LlamaIndex to rebuild it from the current LLM metadata.

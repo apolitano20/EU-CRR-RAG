@@ -28,7 +28,7 @@ export default function SourceChipList({ sources, queryLanguage, onSourceClick }
   return (
     <div className="border-t border-slate-100 pt-3">
       <p className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">
-        Cross-References
+        Sources
       </p>
       <div className="flex flex-wrap gap-2">
         {unique.map((source, i) => {

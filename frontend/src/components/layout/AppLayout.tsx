@@ -38,6 +38,7 @@ export default function AppLayout() {
             <ChatPanel
               onArticleSelect={handleArticleSelect}
               onArticleNotFound={handleArticleNotFound}
+              selectedArticle={selectedArticle}
             />
           </Panel>
 

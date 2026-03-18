@@ -154,6 +154,19 @@ class CitingArticlesResponse(BaseModel):
     language: Optional[str] = None
 
 
+class FeedbackRequest(BaseModel):
+    query: str
+    answer: str
+    feedback: str
+    sources: list[dict] = []
+    viewed_article: Optional[dict] = None
+
+
+class FeedbackResponse(BaseModel):
+    status: str
+    filename: str
+
+
 # ------------------------------------------------------------------
 # Language detection heuristic
 # ------------------------------------------------------------------
@@ -234,6 +247,58 @@ def get_citing_articles(article_id: str, language: Optional[str] = None) -> Citi
         citing_articles=[CitingArticleItem(**r) for r in results],
         language=language,
     )
+
+
+@app.post("/api/feedback", response_model=FeedbackResponse)
+def submit_feedback(request: FeedbackRequest) -> FeedbackResponse:
+    import re
+    from pathlib import Path
+
+    cases_dir = Path("evals/cases")
+    cases_dir.mkdir(parents=True, exist_ok=True)
+
+    existing = list(cases_dir.glob("case_*.md"))
+    numbers = [
+        int(m.group(1))
+        for f in existing
+        if (m := re.match(r"case_(\d+)\.md", f.name))
+    ]
+    next_num = max(numbers, default=0) + 1
+    filename = f"case_{next_num:03d}.md"
+
+    lines: list[str] = [f"# Case {next_num:03d}", ""]
+    lines += ["## Query", "", request.query, ""]
+    lines += ["## Answer (AI)", "", request.answer, ""]
+
+    if request.sources:
+        lines += ["## Sources", ""]
+        for s in request.sources:
+            meta = s.get("metadata", {})
+            art = meta.get("article", "unknown")
+            title = meta.get("article_title", "")
+            score = s.get("score", 0)
+            entry = f"- **Article {art}**"
+            if title:
+                entry += f" — {title}"
+            entry += f" (score: {score:.3f})"
+            lines.append(entry)
+        lines.append("")
+
+    if request.viewed_article:
+        art = request.viewed_article
+        art_num = art.get("article", "")
+        art_title = art.get("article_title", "")
+        lines += ["## Article Viewed in Viewer", ""]
+        lines.append(f"**Article {art_num} – {art_title}**")
+        lines.append("")
+        lines.append(art.get("text", ""))
+        lines.append("")
+
+    lines += ["## Feedback / Notes", "", request.feedback, ""]
+
+    (cases_dir / filename).write_text("\n".join(lines), encoding="utf-8")
+    logger.info("Feedback saved to evals/cases/%s", filename)
+    return FeedbackResponse(status="ok", filename=filename)
 
 
 @app.post("/api/ingest", response_model=IngestResponse)

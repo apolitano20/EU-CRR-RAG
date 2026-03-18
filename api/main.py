@@ -7,6 +7,8 @@ Endpoints:
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import os
 import time
@@ -20,7 +22,8 @@ load_dotenv()
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from src.utils.logging_config import setup_logging
@@ -31,7 +34,11 @@ from src.indexing.index_builder import HierarchicalIndexer
 from src.indexing.vector_store import VectorStore
 from src.ingestion.eurlex_ingest import EurLexIngester
 from src.ingestion.language_config import get_config
-from src.query.query_engine import QueryEngine, QueryResult
+from src.query.query_engine import (
+    QueryEngine, QueryResult, LLM_MODEL,
+    _LEGAL_QA_TEMPLATE, _LEGAL_QA_TEMPLATE_WITH_HISTORY,
+    _format_history, _rewrite_query_with_history,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -101,10 +108,16 @@ async def log_requests(request: Request, call_next):
 # ------------------------------------------------------------------
 
 
+class HistoryTurn(BaseModel):
+    question: str
+    answer: str
+
+
 class QueryRequest(BaseModel):
     query: str
     preferred_language: Optional[str] = None
     max_cross_ref_expansions: Optional[int] = None
+    history: list[HistoryTurn] = []
 
 
 class QueryResponse(BaseModel):
@@ -204,16 +217,90 @@ def query(request: QueryRequest) -> QueryResponse:
         )
 
     lang = request.preferred_language or _detect_language(request.query)
+    history_dicts = [t.model_dump() for t in request.history]
     result: QueryResult = _query_engine.query(
         request.query,
         language=lang,
         max_cross_ref_expansions=request.max_cross_ref_expansions,
+        history=history_dicts,
     )
     return QueryResponse(
         answer=result.answer,
         sources=result.sources,
         trace_id=result.trace_id,
         language=lang,
+    )
+
+
+@app.post("/api/query/stream")
+async def query_stream(request: QueryRequest) -> StreamingResponse:
+    if not _query_engine.is_loaded():
+        raise HTTPException(status_code=503, detail="Index not loaded. Run ingestion first.")
+
+    lang = request.preferred_language or _detect_language(request.query)
+    history_dicts = [t.model_dump() for t in request.history]
+
+    # Rewrite follow-up query in a thread before retrieval
+    effective_query = request.query
+    if history_dicts:
+        effective_query = await asyncio.to_thread(
+            _rewrite_query_with_history,
+            request.query, history_dicts,
+            os.getenv("OPENAI_API_KEY"), LLM_MODEL,
+        )
+        if effective_query != request.query:
+            logger.info("Stream query rewritten: '%s' → '%s'", request.query, effective_query)
+
+    # Run synchronous retrieval in a thread to avoid blocking the event loop
+    all_nodes, sources, trace_id, normalised_query, _engine = await asyncio.to_thread(
+        _query_engine.retrieve,
+        effective_query,
+        lang,
+        request.max_cross_ref_expansions,
+    )
+
+    async def generate():
+        # Build article-labelled context string
+        context_parts = []
+        for node in all_nodes:
+            meta = node.node.metadata
+            art = meta.get("article", "")
+            art_title = meta.get("article_title", "")
+            header = f"Article {art}" + (f" — {art_title}" if art_title else "")
+            context_parts.append(f"{header}\n\n{node.node.get_content()}")
+        context_str = "\n\n---\n\n".join(context_parts)
+
+        history_str = _format_history(history_dicts)
+        if history_str:
+            prompt = _LEGAL_QA_TEMPLATE_WITH_HISTORY.format(
+                history_str=history_str, context_str=context_str, query_str=normalised_query
+            )
+        else:
+            prompt = _LEGAL_QA_TEMPLATE.format(
+                context_str=context_str,
+                query_str=normalised_query,
+            )
+
+        client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        stream = await client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            stream=True,
+            timeout=120.0,
+        )
+
+        async for chunk in stream:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield f"data: {json.dumps({'type': 'token', 'content': delta})}\n\n"
+
+        yield f"data: {json.dumps({'type': 'sources', 'sources': sources, 'trace_id': trace_id, 'language': lang})}\n\n"
+        yield 'data: {"type": "done"}\n\n'
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

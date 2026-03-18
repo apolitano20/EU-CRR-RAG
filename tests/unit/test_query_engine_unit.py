@@ -160,55 +160,68 @@ class TestSynthesisNodeMerging:
         qe._engine_cache_lock = __import__("threading").Lock()
         return qe
 
+    def _mock_openai(self, answer="answer"):
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = answer
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_response
+        return MagicMock(return_value=mock_client), mock_client
+
     def test_expanded_nodes_included_in_synthesis(self):
-        """Synthesis call receives source + deduped expanded nodes."""
+        """Query prompt receives content from source + deduped expanded nodes."""
         qe = self._build_query_engine()
 
         source = _make_node("art_92_en", "92")
+        source.node.get_content.return_value = "source content 92"
         expanded = _make_node("art_26_en", "26")
+        expanded.node.get_content.return_value = "expanded content 26"
 
         mock_engine = MagicMock()
         mock_engine.retrieve.return_value = [source]
-        mock_engine.synthesize.return_value = MagicMock(__str__=lambda s: "answer")
         qe._engine = mock_engine
 
         qe._expand_cross_references = MagicMock(return_value=[expanded])
+        mock_cls, mock_client = self._mock_openai()
 
         with patch("src.query.query_engine._normalise_query", side_effect=lambda q: q), \
-             patch("src.query.query_engine._detect_direct_article_lookup", return_value=None):
+             patch("src.query.query_engine._detect_direct_article_lookup", return_value=None), \
+             patch("src.query.query_engine.openai.OpenAI", mock_cls):
             result = qe.query("What are own funds requirements?")
 
-        # synthesize must have been called with both nodes
-        call_args = mock_engine.synthesize.call_args
-        nodes_passed = call_args[0][1]  # second positional arg
-        node_ids = {n.node.node_id for n in nodes_passed}
-        assert "art_92_en" in node_ids
-        assert "art_26_en" in node_ids
+        # Both nodes' content must appear in the prompt passed to OpenAI
+        call_args = mock_client.chat.completions.create.call_args
+        messages = call_args[1]["messages"] if "messages" in call_args[1] else call_args[0][0]
+        prompt_text = messages[0]["content"]
+        assert "source content 92" in prompt_text
+        assert "expanded content 26" in prompt_text
 
     def test_duplicate_expanded_nodes_are_deduped(self):
-        """A node already in source_nodes must not appear twice in synthesis."""
+        """A node already in source_nodes must not appear twice in the prompt."""
         qe = self._build_query_engine()
 
         source = _make_node("art_92_en", "92")
+        source.node.get_content.return_value = "unique content 92"
         # Same node_id as source — should be dropped from expanded
         duplicate = _make_node("art_92_en", "92")
+        duplicate.node.get_content.return_value = "unique content 92"
 
         mock_engine = MagicMock()
         mock_engine.retrieve.return_value = [source]
-        mock_engine.synthesize.return_value = MagicMock(__str__=lambda s: "answer")
         qe._engine = mock_engine
 
         qe._expand_cross_references = MagicMock(return_value=[duplicate])
+        mock_cls, mock_client = self._mock_openai()
 
         with patch("src.query.query_engine._normalise_query", side_effect=lambda q: q), \
-             patch("src.query.query_engine._detect_direct_article_lookup", return_value=None):
+             patch("src.query.query_engine._detect_direct_article_lookup", return_value=None), \
+             patch("src.query.query_engine.openai.OpenAI", mock_cls):
             result = qe.query("Article 92 requirements")
 
-        call_args = mock_engine.synthesize.call_args
-        nodes_passed = call_args[0][1]
-        # Only one node — duplicate was deduped
-        assert len(nodes_passed) == 1
-        assert nodes_passed[0].node.node_id == "art_92_en"
+        call_args = mock_client.chat.completions.create.call_args
+        messages = call_args[1]["messages"] if "messages" in call_args[1] else call_args[0][0]
+        prompt_text = messages[0]["content"]
+        # Content should appear only once (duplicate was deduped)
+        assert prompt_text.count("unique content 92") == 1
 
     def test_get_article_deduplicates_by_internal_node_id(self):
         """get_article() must not concatenate the same Qdrant record twice.
@@ -280,13 +293,14 @@ class TestSynthesisNodeMerging:
 
         mock_engine = MagicMock()
         mock_engine.retrieve.return_value = [source]
-        mock_engine.synthesize.return_value = MagicMock(__str__=lambda s: "answer")
         qe._engine = mock_engine
 
         qe._expand_cross_references = MagicMock(return_value=[expanded])
+        mock_cls, _ = self._mock_openai()
 
         with patch("src.query.query_engine._normalise_query", side_effect=lambda q: q), \
-             patch("src.query.query_engine._detect_direct_article_lookup", return_value=None):
+             patch("src.query.query_engine._detect_direct_article_lookup", return_value=None), \
+             patch("src.query.query_engine.openai.OpenAI", mock_cls):
             result = qe.query("What are own funds requirements?")
 
         expanded_flags = {s["metadata"]["article"]: s["expanded"] for s in result.sources}

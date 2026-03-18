@@ -6,7 +6,7 @@ import QuestionInput from "./QuestionInput";
 import AnswerCard from "./AnswerCard";
 import FeedbackBox from "./FeedbackBox";
 import { getArticle, ArticleNotFoundError } from "@/lib/api";
-import type { ArticleResponse, QueryResponse } from "@/lib/types";
+import type { ArticleResponse, HistoryTurn, QueryResponse } from "@/lib/types";
 
 interface Message {
   question: string;
@@ -20,7 +20,7 @@ interface ChatPanelProps {
 }
 
 export default function ChatPanel({ onArticleSelect, onArticleNotFound, selectedArticle }: ChatPanelProps) {
-  const { isLoading, error, submitQuery } = useQuery();
+  const { isLoading, error, streamingAnswer, submitQuery } = useQuery();
   const [messages, setMessages] = useState<Message[]>([]);
   const [pendingQuestion, setPendingQuestion] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -29,9 +29,14 @@ export default function ChatPanel({ onArticleSelect, onArticleNotFound, selected
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
 
+  const MAX_HISTORY_TURNS = 5;
+
   const handleSubmit = async (query: string) => {
     setPendingQuestion(query);
-    const result = await submitQuery(query);
+    const history: HistoryTurn[] = messages
+      .slice(-MAX_HISTORY_TURNS)
+      .map((m) => ({ question: m.question, answer: m.result.answer }));
+    const result = await submitQuery(query, undefined, history);
     if (result) {
       setMessages((prev) => [...prev, { question: query, result }]);
     }
@@ -100,7 +105,14 @@ export default function ChatPanel({ onArticleSelect, onArticleNotFound, selected
             </div>
           )}
 
-          {isLoading && (
+          {isLoading && streamingAnswer && (
+            <div className="prose prose-sm max-w-none text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">
+              {streamingAnswer}
+              <span className="inline-block w-0.5 h-4 bg-slate-400 animate-pulse align-text-bottom ml-0.5" />
+            </div>
+          )}
+
+          {isLoading && !streamingAnswer && (
             <div className="space-y-2.5 animate-pulse mt-1">
               {[72, 55, 83, 40, 68].map((w, i) => (
                 <div

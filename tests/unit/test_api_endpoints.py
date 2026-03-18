@@ -187,6 +187,68 @@ class TestQueryEndpoint:
 
 
 # ---------------------------------------------------------------------------
+# POST /api/query — history field
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestQueryHistoryField:
+    def test_history_field_optional_defaults_empty(self, loaded_client, app_module):
+        client, mod = loaded_client
+        from src.query.query_engine import QueryResult
+        mod._query_engine.query = MagicMock(
+            return_value=QueryResult(answer="ok", sources=[], trace_id="t1")
+        )
+        r = client.post("/api/query", json={"query": "What is CET1?"})
+        assert r.status_code == 200
+
+    def test_history_forwarded_to_engine(self, loaded_client, app_module):
+        client, mod = loaded_client
+        from src.query.query_engine import QueryResult
+        mock_query = MagicMock(
+            return_value=QueryResult(answer="ok", sources=[], trace_id="t1")
+        )
+        mod._query_engine.query = mock_query
+        client.post("/api/query", json={
+            "query": "And what about AT1?",
+            "history": [{"question": "What is CET1?", "answer": "Common Equity Tier 1."}],
+        })
+        _, kwargs = mock_query.call_args
+        assert kwargs.get("history") == [{"question": "What is CET1?", "answer": "Common Equity Tier 1."}]
+
+    def test_history_field_type_validated(self, loaded_client, app_module):
+        client, _ = loaded_client
+        r = client.post("/api/query", json={"query": "What is CET1?", "history": "bad"})
+        assert r.status_code == 422
+
+    def test_empty_history_list_accepted(self, loaded_client, app_module):
+        client, mod = loaded_client
+        from src.query.query_engine import QueryResult
+        mod._query_engine.query = MagicMock(
+            return_value=QueryResult(answer="ok", sources=[], trace_id="t1")
+        )
+        r = client.post("/api/query", json={"query": "What is CET1?", "history": []})
+        assert r.status_code == 200
+
+    def test_five_turn_history_accepted(self, loaded_client, app_module):
+        client, mod = loaded_client
+        from src.query.query_engine import QueryResult
+        mod._query_engine.query = MagicMock(
+            return_value=QueryResult(answer="ok", sources=[], trace_id="t1")
+        )
+        history = [{"question": f"Q{i}", "answer": f"A{i}"} for i in range(5)]
+        r = client.post("/api/query", json={"query": "Follow-up?", "history": history})
+        assert r.status_code == 200
+
+    def test_history_turn_missing_answer_field(self, loaded_client, app_module):
+        client, _ = loaded_client
+        r = client.post("/api/query", json={
+            "query": "What is CET1?",
+            "history": [{"question": "Q without answer"}],
+        })
+        assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
 # POST /api/ingest
 # ---------------------------------------------------------------------------
 

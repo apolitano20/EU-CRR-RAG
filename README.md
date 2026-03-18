@@ -8,7 +8,8 @@ A Retrieval-Augmented Generation system for the EU Capital Requirements Regulati
 2. Parses and indexes it preserving the full legal hierarchy: PART → TITLE → CHAPTER → SECTION → ARTICLE
 3. Supports multilingual ingestion (EN / IT / PL) in a single shared index with per-node language metadata
 4. Answers regulatory questions via a FastAPI HTTP API, citing the relevant articles
-5. Serves a two-panel Next.js UI: chat Q&A on the left, article viewer on the right
+5. Supports multi-turn conversational memory — follow-up questions are rewritten into standalone queries before retrieval and prior answers are injected into synthesis
+6. Serves a two-panel Next.js UI: chat Q&A on the left, article viewer on the right
 
 ## Tech stack
 
@@ -104,8 +105,11 @@ Activates `.venv`, kills stale processes, and opens both panels in the browser.
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/health` | Liveness check; reports whether the index is loaded |
-| `POST` | `/api/query` | Ask a compliance question |
+| `POST` | `/api/query` | Ask a compliance question (sync) |
+| `POST` | `/api/query/stream` | Ask a compliance question (Server-Sent Events token stream) |
 | `GET` | `/api/article/{article_id}` | Fetch full article text and metadata for the viewer |
+| `GET` | `/api/article/{article_id}/citing` | Return all articles that cite the given article |
+| `POST` | `/api/feedback` | Save a Q&A pair as a labelled eval case |
 | `POST` | `/api/ingest` | Trigger ingestion programmatically |
 
 ### Example queries
@@ -116,6 +120,16 @@ curl -X POST http://localhost:8080/api/query \
   -H "Content-Type: application/json" \
   -d '{"query": "What are the minimum CET1 requirements?", "preferred_language": "en"}'
 
+# Follow-up with conversation history (last N turns included)
+curl -X POST http://localhost:8080/api/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "And what about AT1?",
+    "history": [
+      {"question": "What are the minimum CET1 requirements?", "answer": "CET1 must be at least 4.5% of RWA per Article 92(1)(a)."}
+    ]
+  }'
+
 # Italian query (language auto-detected from accent characters)
 curl -X POST http://localhost:8080/api/query \
   -H "Content-Type: application/json" \
@@ -123,6 +137,9 @@ curl -X POST http://localhost:8080/api/query \
 
 # Fetch a specific article
 curl "http://localhost:8080/api/article/92?language=en"
+
+# Reverse reference lookup — which articles cite Article 92?
+curl "http://localhost:8080/api/article/92/citing?language=en"
 ```
 
 Response shape:
@@ -177,6 +194,10 @@ Next.js frontend        Two-panel UI: chat Q&A + article viewer
 
 **Direct article lookup:** queries mentioning exactly one article (e.g. "Explain Article 92") bypass vector ranking and use an exact metadata filter.
 
+**Conversational memory:** the frontend sends the last 5 Q&A turns with every request. When history is present, the query is rewritten into a standalone question before retrieval (preventing embedding quality degradation from conversational fragments), and prior answers are injected into the synthesis prompt.
+
+**Streaming synthesis:** `/api/query/stream` streams GPT-4o tokens via Server-Sent Events. The frontend renders tokens live with a blinking cursor; the skeleton loader is shown only during the retrieval phase.
+
 **Multilingual:** a single Qdrant collection holds all languages. Each node carries a `language` metadata field; queries can filter by language or retrieve cross-language.
 
 ## Directory structure
@@ -206,7 +227,7 @@ eu-crr-rag/
 ├── scripts/
 │   └── fix_cross_refs.py          # Qdrant metadata patch utilities
 ├── tests/
-│   ├── unit/                      # 169 unit tests (no external deps)
+│   ├── unit/                      # 235 unit tests (no external deps)
 │   └── integration/               # Integration tests (require live Qdrant + OpenAI)
 ├── colab_ingest.ipynb             # GPU-accelerated ingestion notebook
 ├── docker-compose.yml

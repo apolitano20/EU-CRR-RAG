@@ -1,4 +1,4 @@
-import type { ArticleResponse, QueryResponse, SourceNode } from "./types";
+import type { ArticleResponse, HistoryTurn, QueryResponse, SourceNode } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -8,17 +8,48 @@ export class ArticleNotFoundError extends Error {
   }
 }
 
-export async function postQuery(
+export async function postQueryStream(
   query: string,
-  language?: string
+  language: string | undefined,
+  history: HistoryTurn[],
+  onToken: (token: string) => void,
 ): Promise<QueryResponse> {
-  const res = await fetch(`${API_BASE}/api/query`, {
+  const res = await fetch(`${API_BASE}/api/query/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, preferred_language: language ?? null }),
+    body: JSON.stringify({ query, preferred_language: language ?? null, history }),
   });
   if (!res.ok) throw new Error(`Query failed: ${res.status} ${res.statusText}`);
-  return res.json();
+
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalResult: QueryResponse | null = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      const payload = JSON.parse(line.slice(6));
+      if (payload.type === "token") {
+        onToken(payload.content);
+      } else if (payload.type === "sources") {
+        finalResult = {
+          answer: "", // filled in by the caller from accumulated tokens
+          sources: payload.sources,
+          trace_id: payload.trace_id,
+          language: payload.language ?? null,
+        };
+      }
+    }
+  }
+
+  if (!finalResult) throw new Error("Stream ended without sources event");
+  return finalResult;
 }
 
 export async function submitFeedback(payload: {

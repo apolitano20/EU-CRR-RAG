@@ -13,6 +13,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Optional
 
+import openai  # raw sync client — distinct from llama_index.llms.openai.OpenAI
+
 from llama_index.core import Settings, VectorStoreIndex
 from llama_index.core.postprocessor import SimilarityPostprocessor
 from llama_index.core.prompts import PromptTemplate
@@ -39,6 +41,7 @@ SIMILARITY_CUTOFF = 0.3
 RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
 LLM_MODEL = "gpt-4o"
 RETRIEVAL_ALPHA: float = float(os.getenv("RETRIEVAL_ALPHA", "0.5"))
+_HISTORY_MAX_TURNS = 5
 
 _LEGAL_QA_TEMPLATE = PromptTemplate(
     "You are a regulatory compliance expert specialising in EU prudential banking regulation "
@@ -64,6 +67,94 @@ _LEGAL_QA_TEMPLATE = PromptTemplate(
     "Comma-separated list of every Article cited above (e.g. 'Article 92, Article 93, Article 128').\n\n"
     "Answer:"
 )
+
+
+_LEGAL_QA_TEMPLATE_WITH_HISTORY = PromptTemplate(
+    "You are a regulatory compliance expert specialising in EU prudential banking regulation "
+    "(CRR – Regulation (EU) No 575/2013).\n\n"
+    "Use ONLY the context below to answer the question. "
+    "Do not speculate or introduce information not present in the context. "
+    "If the context does not contain enough information to answer, respond with ONLY the "
+    "following sentence: 'The provided context does not contain sufficient information to "
+    "answer this question.'\n\n"
+    "Prior conversation:\n{history_str}\n\n"
+    "---------------------\n"
+    "{context_str}\n"
+    "---------------------\n\n"
+    "Question: {query_str}\n\n"
+    "Respond using the following structure. Omit any section that is not applicable.\n\n"
+    "**Direct Answer**\n"
+    "A concise answer to the question in 1–3 sentences.\n\n"
+    "**Key Provisions**\n"
+    "Bullet-point summary of the relevant rules, thresholds, or definitions drawn from the context. "
+    "Each bullet must reference the Article it comes from (e.g. '- Article 92(1)(a): …').\n\n"
+    "**Conditions, Exceptions & Definitions**\n"
+    "Any qualifications, carve-outs, special treatments, or defined terms that affect the answer.\n\n"
+    "**Article References**\n"
+    "Comma-separated list of every Article cited above (e.g. 'Article 92, Article 93, Article 128').\n\n"
+    "Answer:"
+)
+
+
+def _format_history(history: list[dict], max_turns: int = _HISTORY_MAX_TURNS) -> str:
+    """Format conversation history into a readable string for prompt injection.
+
+    Args:
+        history: List of dicts with 'question' and 'answer' keys.
+        max_turns: Maximum number of recent turns to include.
+
+    Returns:
+        Formatted string, or empty string if history is empty.
+    """
+    if not history:
+        return ""
+    turns = history[-max_turns:]
+    formatted = []
+    for turn in turns:
+        formatted.append(f"Q: {turn['question']}\nA: {turn['answer']}")
+    return "\n\n---\n\n".join(formatted)
+
+
+def _rewrite_query_with_history(
+    query: str,
+    history: list[dict],
+    api_key: Optional[str],
+    model: str = LLM_MODEL,
+) -> str:
+    """Rewrite a follow-up query into a standalone question using conversation history.
+
+    Args:
+        query: The current user query (possibly a follow-up).
+        history: List of prior Q&A turns.
+        api_key: OpenAI API key.
+        model: LLM model to use for rewriting.
+
+    Returns:
+        Rewritten standalone query, or the original query if rewriting fails.
+    """
+    history_str = _format_history(history)
+    prompt = (
+        "You are helping rewrite a follow-up question into a complete, self-contained question "
+        "that can be understood without any prior context.\n\n"
+        "Conversation history:\n"
+        f"{history_str}\n\n"
+        "Follow-up question: " + query + "\n\n"
+        "Rewrite the follow-up question as a complete, standalone question in the SAME LANGUAGE "
+        "as the original question. If the question is already self-contained, return it unchanged. "
+        "Return ONLY the rewritten question, nothing else."
+    )
+    try:
+        client = openai.OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            timeout=30.0,
+        )
+        rewritten = (response.choices[0].message.content or "").strip()
+        return rewritten if rewritten else query
+    except Exception as exc:
+        logger.warning("Query rewrite failed (%s) — using original query", exc)
+        return query
 
 
 # CRR-specific abbreviation expansion: inserted before embedding so the model sees full terms.
@@ -235,12 +326,17 @@ class QueryEngine:
     # Query
     # ------------------------------------------------------------------
 
-    def query(
+    def retrieve(
         self,
         user_query: str,
         language: Optional[str] = None,
         max_cross_ref_expansions: Optional[int] = None,
-    ) -> QueryResult:
+    ) -> tuple:
+        """Run stages 1 & 2 (retrieval + cross-reference expansion).
+
+        Returns:
+            (all_nodes_for_synthesis, sources, trace_id, normalised_query, engine)
+        """
         if self._engine is None:
             raise RuntimeError("Call load() before querying.")
 
@@ -273,7 +369,10 @@ class QueryEngine:
         if direct_art:
             source_nodes = self._direct_article_retrieve(direct_art, user_query, language)
             if not source_nodes:
-                logger.warning("[%s] Direct lookup for Article %s returned no nodes — falling back to semantic retrieval", trace_id, direct_art)
+                logger.warning(
+                    "[%s] Direct lookup for Article %s returned no nodes — falling back to semantic retrieval",
+                    trace_id, direct_art,
+                )
                 source_nodes = engine.retrieve(query_bundle)
         else:
             source_nodes = engine.retrieve(query_bundle)
@@ -291,16 +390,10 @@ class QueryEngine:
         expanded_nodes = self._expand_cross_references(source_nodes, language=language, limit=expansions)
         t_expand_ms = round((time.perf_counter() - t_exp) * 1000)
 
-        # Deduplicate expanded nodes against primary results so the LLM doesn't
-        # see the same article twice, then merge for synthesis.
+        # Deduplicate expanded nodes against primary results
         source_ids = {node.node.node_id for node in source_nodes}
         deduped_expanded = [n for n in expanded_nodes if n.node.node_id not in source_ids]
         all_nodes_for_synthesis = source_nodes + deduped_expanded
-
-        # Stage 3: LLM synthesis over primary + expanded context
-        t_syn = time.perf_counter()
-        response = engine.synthesize(query_bundle, all_nodes_for_synthesis)
-        t_synthesis_ms = round((time.perf_counter() - t_syn) * 1000)
 
         sources = [
             {
@@ -321,24 +414,84 @@ class QueryEngine:
             for node in deduped_expanded
         ]
 
-        latency_ms = round((time.perf_counter() - t0) * 1000)
-
         logger.info(
-            "[%s] Retrieved %d source nodes + %d expanded (%d synthesized); "
-            "answer=%d chars; latency=%dms "
-            "(retrieval=%dms, expansion=%dms, synthesis=%dms)",
+            "[%s] Retrieved %d source nodes + %d expanded (%d total); "
+            "retrieval=%dms, expansion=%dms",
             trace_id,
             len(source_nodes),
             len(deduped_expanded),
             len(all_nodes_for_synthesis),
-            len(str(response)),
-            latency_ms,
             t_retrieval_ms,
             t_expand_ms,
+        )
+
+        return all_nodes_for_synthesis, sources, trace_id, user_query, engine
+
+    def query(
+        self,
+        user_query: str,
+        language: Optional[str] = None,
+        max_cross_ref_expansions: Optional[int] = None,
+        history: Optional[list[dict]] = None,
+    ) -> QueryResult:
+        t0 = time.perf_counter()
+        history = history or []
+
+        # Stage 0: Query rewriting — only when history is present
+        if history:
+            effective_query = _rewrite_query_with_history(
+                user_query, history, self.openai_api_key, self.llm_model
+            )
+            if effective_query != user_query:
+                logger.info("Query rewritten: '%s' → '%s'", user_query, effective_query)
+        else:
+            effective_query = user_query
+
+        all_nodes_for_synthesis, sources, trace_id, normalised_query, _engine = self.retrieve(
+            effective_query, language, max_cross_ref_expansions
+        )
+
+        # Build article-labelled context string (mirrors stream endpoint)
+        context_parts = []
+        for node in all_nodes_for_synthesis:
+            meta = node.node.metadata
+            art = meta.get("article", "")
+            art_title = meta.get("article_title", "")
+            header = f"Article {art}" + (f" — {art_title}" if art_title else "")
+            context_parts.append(f"{header}\n\n{node.node.get_content()}")
+        context_str = "\n\n---\n\n".join(context_parts)
+
+        # Stage 3: LLM synthesis — call OpenAI directly with optional history injection
+        t_syn = time.perf_counter()
+        history_str = _format_history(history)
+        if history_str:
+            prompt = _LEGAL_QA_TEMPLATE_WITH_HISTORY.format(
+                history_str=history_str, context_str=context_str, query_str=normalised_query
+            )
+        else:
+            prompt = _LEGAL_QA_TEMPLATE.format(
+                context_str=context_str, query_str=normalised_query
+            )
+
+        oai_client = openai.OpenAI(api_key=self.openai_api_key)
+        oai_response = oai_client.chat.completions.create(
+            model=self.llm_model,
+            messages=[{"role": "user", "content": prompt}],
+            timeout=120.0,
+        )
+        answer = (oai_response.choices[0].message.content or "").strip()
+        t_synthesis_ms = round((time.perf_counter() - t_syn) * 1000)
+
+        latency_ms = round((time.perf_counter() - t0) * 1000)
+        logger.info(
+            "[%s] answer=%d chars; total=%dms (synthesis=%dms)",
+            trace_id,
+            len(answer),
+            latency_ms,
             t_synthesis_ms,
         )
 
-        return QueryResult(answer=str(response), sources=sources, trace_id=trace_id)
+        return QueryResult(answer=answer, sources=sources, trace_id=trace_id)
 
     # ------------------------------------------------------------------
     # Cross-reference expansion

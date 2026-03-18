@@ -1,3 +1,8 @@
+export interface HistoryTurn {
+  question: string;
+  answer: string;
+}
+
 export interface SourceNode {
   text: string;
   score: number;

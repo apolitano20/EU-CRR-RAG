@@ -5,6 +5,32 @@ For open tasks and backlog, see `WORKLOG.md`.
 
 ---
 
+## 2026-03-18 — Conversational memory (multi-turn chat history)
+
+Implemented end-to-end conversational memory so follow-up questions like "and what about AT1?" are understood in context of prior Q&A turns rather than being sent as stateless queries.
+
+**Backend (`src/query/query_engine.py`):** Added `_format_history()`, `_rewrite_query_with_history()`, and `_LEGAL_QA_TEMPLATE_WITH_HISTORY`. Modified `QueryEngine.query()` to accept `history: list[dict]`, rewrite follow-ups into standalone queries before retrieval (skipped when history is empty), and call OpenAI directly instead of `engine.synthesize()` (matching the stream path). Both sync and stream paths are now symmetric. `_HISTORY_MAX_TURNS = 5` caps prompt growth.
+
+**Backend (`api/main.py`):** Added `HistoryTurn` Pydantic model. Extended `QueryRequest` with `history: list[HistoryTurn] = []`. `/api/query` forwards history dicts to `query_engine.query()`. `/api/query/stream` rewrites the query in a threadpool before retrieval, then injects history into the synthesis prompt inside `generate()`.
+
+**Frontend:** `HistoryTurn` interface added to `types.ts`. `postQueryStream` in `api.ts` accepts and forwards `history`. `submitQuery` in `useQuery.ts` threads history through. `ChatPanel.tsx` slices the last 5 messages into `HistoryTurn[]` and passes them on every submission.
+
+**Tests:** 18 new unit tests in `tests/unit/test_conversational_memory.py` (format_history, rewrite, QueryEngine integration). 6 new tests added to `test_api_endpoints.py::TestQueryHistoryField`. 3 existing `TestSynthesisNodeMerging` tests updated to mock OpenAI directly (previously relied on `engine.synthesize()` which is no longer called). **235 unit tests, all green.**
+
+---
+
+## 2026-03-18 — GPT-4o token streaming (SSE)
+
+Implemented end-to-end streaming of GPT-4o synthesis tokens so the user sees text appear as it is generated rather than waiting for the full response.
+
+**Backend:** Extracted a new `QueryEngine.retrieve()` method encapsulating stages 1 & 2 (retrieval + cross-ref expansion). Added `POST /api/query/stream` FastAPI endpoint that runs retrieval in a threadpool (`asyncio.to_thread`), then streams tokens via Server-Sent Events using `AsyncOpenAI` directly (bypassing LlamaIndex's synchronous synthesizer). The existing `query()` endpoint is unchanged.
+
+**Frontend:** Replaced `postQuery` with `postQueryStream` in `api.ts` (SSE reader with `onToken` callback). Updated `useQuery.ts` to expose `streamingAnswer` state. Updated `ChatPanel.tsx` to render live streaming text with a blinking cursor during synthesis; falls back to the skeleton loader only during the retrieval phase (before the first token arrives).
+
+**Files changed:** `src/query/query_engine.py`, `api/main.py`, `frontend/src/lib/api.ts`, `frontend/src/hooks/useQuery.ts`, `frontend/src/components/chat/ChatPanel.tsx`.
+
+---
+
 ## 2026-03-18 — Italian language parity audit: 4 frontend regressions fixed; 14 new tests
 
 Identified and fixed all Italian-language regressions in the frontend viewer. No backend changes required.

@@ -2,6 +2,38 @@
 
 ---
 
+## [2026-03-18] Regex with `[\w\s]` capture + lazy quantifier + `\?`/`$` end anchor matches arbitrarily long phrases
+
+**Context:** Writing `_DEF_QUERY_RE` to detect definition queries like "what is institution?" — the term capture group used `[\w\s\-]*?` (lazy) with end condition `\?|$`.
+**What happened / insight:** "What are the CET1 requirements under Article 92?" matched because the lazy quantifier expanded "CET1 requirements under Article 92" (5 words) until `\?` was satisfied at the sentence-final `?`. Any pattern of the form `what is/are X?` where X can include spaces will over-capture unless the term is bounded.
+**Take-away:** After extracting a term with a regex that allows embedded spaces, apply a word-count guard as a post-capture sanity check: `if len(term.split()) > 4: return None`. Real CRR definition terms top out at 4–5 words; longer captures are false positives.
+
+---
+
+## [2026-03-18] Test sample text must not contain incidental occurrences of the split token
+
+**Context:** Writing `TestParse` for `DefinitionsStore._parse()`, which splits Article 4 text on `\((\d+)\)\s+` boundaries.
+**What happened / insight:** The sample text for definition 3 contained `"of Article 4(1) of Directive 2014/65/EU"`. The `(` before `1` is preceded by `4` which is `\w`, so `(?<!\w)\(1\)` should not match — but `"point (1) of"` (from the original phrasing "as defined in point (1) of") does match because `(` there is preceded by a space. This created a spurious 5th definition, breaking count/index assertions.
+**Take-away:** When writing parser unit tests, audit the sample text for any incidental occurrence of the split pattern — not just in the obvious places. For `_DEF_SPLIT_RE` specifically, avoid embedded `(N) keyword` phrases (parenthesised number followed by a space) anywhere in test fixture text that isn't a real definition boundary.
+
+---
+
+## [2026-03-18] All `__new__`-based test helpers must be updated when new instance attributes are added
+
+**Context:** Adding `self._defs` to `QueryEngine.__init__` to hold a `DefinitionsStore`. Existing `TestSynthesisNodeMerging._build_query_engine()` creates a `QueryEngine` via `object.__new__(QueryEngine)`, bypassing `__init__`.
+**What happened / insight:** Three tests failed with `AttributeError: 'QueryEngine' object has no attribute '_defs'` because the `__new__`-based helper didn't set it. The same issue would arise for any test helper that uses `__new__` to instantiate the class.
+**Take-away:** After adding any new `self.X = ...` to a class's `__init__`, grep for `__new__(ClassName)` and `QueryEngine.__new__` (or equivalent) in the test suite and add the new attribute there too. A missing attribute in a `__new__`-constructed instance will always surface as `AttributeError` at runtime, not at construction time.
+
+---
+
+## [2026-03-18] Tests that assert on cross-ref fetch order must be updated when an article is skipped
+
+**Context:** `TestExpandCrossReferences.test_refs_fetched_in_numeric_order` used refs `"114,26,4"` and asserted `fetched == ["4", "26", "114"]`. After adding the Article 4 skip guard in `_expand_cross_references()`, the test broke.
+**What happened / insight:** Behavioural guards (skip Article 4, skip already-seen refs, etc.) change the expected fetch sequence. Tests that pin the exact list of fetched articles need to be updated whenever the guard list changes.
+**Take-away:** When adding a skip rule to `_expand_cross_references()`, immediately update any test whose ref fixture includes the skipped article in the expected output list. Add a comment in the test explaining why that article is absent: `# Article 4 skipped by definitions fast-path guard`.
+
+---
+
 ## [2026-03-18] `import openai` and `from llama_index.llms.openai import OpenAI` coexist without conflict
 **Context:** Adding the raw OpenAI sync client to `query_engine.py`, which already imports LlamaIndex's `OpenAI` wrapper.
 **What happened / insight:** `import openai` (the package) and `from llama_index.llms.openai import OpenAI` (a class) live in different namespaces. You call the raw client as `openai.OpenAI(...)` and the LlamaIndex wrapper as `OpenAI(...)`. They do not shadow each other. Test patch target for the raw client is `src.query.query_engine.openai.OpenAI`.

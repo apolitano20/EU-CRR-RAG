@@ -5,6 +5,12 @@ For open tasks and backlog, see `WORKLOG.md`.
 
 ---
 
+## 2026-03-18 — Article 4 DefinitionsStore: fast-path lookup bypassing RAG
+
+Built a `DefinitionsStore` that parses Article 4 of the CRR into a structured JSON index at startup, enabling O(1) definition lookups without touching the RAG pipeline or calling the LLM. Added a Stage 0.5 fast-path in `QueryEngine.query()` and `/api/query/stream` that intercepts definition queries (e.g. "What is the definition of institution?", "Article 4(1)", "Explain Article 4") and returns answers directly from the JSON cache. Article 4 is now also skipped in `_expand_cross_references()`, eliminating the token-overflow / 429-rate-limit errors that occurred when cross-ref expansion pulled the full 129-definition blob into synthesis context. `definitions/definitions_en.json` and `definitions/definitions_it.json` committed to the repo. 36 new unit tests; 315 total, all green.
+
+---
+
 ## 2026-03-18 — Conversational memory (multi-turn chat history)
 
 Implemented end-to-end conversational memory so follow-up questions like "and what about AT1?" are understood in context of prior Q&A turns rather than being sent as stateless queries.

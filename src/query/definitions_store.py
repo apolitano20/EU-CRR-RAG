@@ -18,9 +18,11 @@ logger = logging.getLogger(__name__)
 DEFINITIONS_DIR = Path(__file__).parent.parent.parent / "definitions"
 ARTICLE_4_NUM = "4"
 
-# Split Article 4 text on numbered definition boundaries: "(N) "
-# Not preceded by a word char to avoid matching "(a)" sub-items (letters only match \d+)
-_DEF_SPLIT_RE = re.compile(r"(?<!\w)\((\d+)\)\s+")
+# Two formats used across languages:
+#   English:  (1) 'term' means ...    → anchored with opening paren
+#   Italian:  1) «term» significa ... → no opening paren
+_DEF_SPLIT_RE_PAREN = re.compile(r"(?<!\w)\((\d+)\)\s+")   # EN: (N)
+_DEF_SPLIT_RE_BARE  = re.compile(r"(?<!\w)(\d+)\)\s+")     # IT: N)
 
 # Extract quoted term from start of each definition body.
 # Handles straight quotes, Unicode curly quotes (EN and IT), and guillemets.
@@ -121,14 +123,20 @@ class DefinitionsStore:
         # Step 1: normalise whitespace
         text = re.sub(r"[ \t\r\n]+", " ", text).strip()
 
-        # Step 2: split on definition boundaries
-        parts = _DEF_SPLIT_RE.split(text)
+        # Step 2: detect format and split on definition boundaries.
+        # English uses "(1) 'term'" while Italian uses "1) «term»".
+        # Detect by checking whether "(1) " appears in the first 500 chars.
+        split_re = _DEF_SPLIT_RE_PAREN if re.search(r"\(1\)\s+", text[:500]) else _DEF_SPLIT_RE_BARE
+        parts = split_re.split(text)
         # parts = [pre_text, num_1, seg_1, num_2, seg_2, ...]
         definitions = []
         for number, segment in zip(parts[1::2], parts[2::2]):
             seg = segment.strip().rstrip(";. ")
             m = _TERM_RE.match(seg)
-            term = m.group(1).strip().lower() if m else ""
+            if not m:
+                # No quoted term → false split inside a definition body; skip.
+                continue
+            term = m.group(1).strip().lower()
             definitions.append({"number": number, "term": term, "text": seg})
 
         return definitions
@@ -152,6 +160,15 @@ class DefinitionsStore:
             )
 
         text = art4_payload.get("text", "") or ""
+        if not text:
+            # LlamaIndex stores node text inside _node_content JSON blob
+            import json as _json
+            raw = art4_payload.get("_node_content", "")
+            if raw:
+                try:
+                    text = _json.loads(raw).get("text", "") or ""
+                except Exception:
+                    pass
         definitions = self._parse(text)
 
         DEFINITIONS_DIR.mkdir(parents=True, exist_ok=True)

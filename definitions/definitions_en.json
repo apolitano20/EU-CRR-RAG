@@ -1,8 +1,8 @@
 {
   "language": "en",
   "article": "4",
-  "built_at": "2026-03-18T16:33:14.149519+00:00",
-  "count": 152,
+  "built_at": "2026-03-18T16:42:40.711676+00:00",
+  "count": 179,
   "definitions": [
     {
       "number": "1",
@@ -32,7 +32,7 @@
     {
       "number": "7",
       "term": "collective investment undertaking",
-      "text": "‘collective investment undertaking’ or ‘CIU’ means a UCITS as defined in Article 1(2) of Directive 2009/65/EC of the European Parliament and of the Council ( 8 ) or an alternative investment fund (AIF) as defined in point (a) of Article 4(1) of Directive 2011/61/EU of the European Parliament and of the Council ( 9 )"
+      "text": "‘collective investment undertaking’ or ‘CIU’ means a UCITS as defined in Article 1(2) of Directive 2009/65/EC of the European Parliament and of the Council ( 8 ) or an alternative investment fund (AIF) as defined in point (a) of Article 4(1) of Directive 2011/61/EU of the European Parliament and of the Council ( 9 )"
     },
     {
       "number": "8",
@@ -65,6 +65,11 @@
       "text": "‘sponsor’ means a sponsor as defined in point"
     },
     {
+      "number": "14a",
+      "term": "original lender",
+      "text": "‘original lender’ means an original lender as defined in point"
+    },
+    {
       "number": "15",
       "term": "parent undertaking",
       "text": "‘parent undertaking’ means an undertaking that controls, within the meaning of point (37), one or more undertakings"
@@ -92,7 +97,12 @@
     {
       "number": "20",
       "term": "financial holding company",
-      "text": "‘financial holding company’ means an undertaking that meets all of the following conditions: The competent authority may decide that an entity does not qualify as a financial holding company even if one of the indicators referred to in the first paragraph, points (i) to (iv), is met, where the competent authority considers that the relevant indicator does not convey a fair and true view of the main activities and risks of the group. Before making such decision, the competent authority shall consult EBA and provide a substantiated and detailed qualitative and quantitative justification. The competent authority shall have due regard to EBA’s opinion and, where it decides to deviate from it, shall within three months of the date of receipt of EBA’s opinion, provide to EBA the rationale for deviating from the relevant opinion; (a) it is a financial institution; (b) it is not a mixed financial holding company; (c) it has at least one subsidiary that is an institution; (d) more than 50 % of any of the following indicators are associated, on a steady basis, with subsidiaries that are institutions or financial institutions, and with activities carried out by the undertaking itself that are not related to the acquisition or owning of holdings in subsidiaries when those activities are of the same nature as the ones carried out by institutions or financial institutions: (i) the undertaking’s equity based on its consolidated situation; (ii) the undertaking’s assets based on its consolidated situation; (iii) the undertaking’s revenues based on its consolidated situation; (iv) the undertaking’s personnel based on its consolidated situation; (v) other indicators considered relevant by the competent authority. (20a) ‘investment holding company’ means an investment holding company as defined in Article 4(1), point (23), of Regulation (EU) 2019/2033"
+      "text": "‘financial holding company’ means an undertaking that meets all of the following conditions: The competent authority may decide that an entity does not qualify as a financial holding company even if one of the indicators referred to in the first paragraph, points (i) to (iv), is met, where the competent authority considers that the relevant indicator does not convey a fair and true view of the main activities and risks of the group. Before making such decision, the competent authority shall consult EBA and provide a substantiated and detailed qualitative and quantitative justification. The competent authority shall have due regard to EBA’s opinion and, where it decides to deviate from it, shall within three months of the date of receipt of EBA’s opinion, provide to EBA the rationale for deviating from the relevant opinion; (a) it is a financial institution; (b) it is not a mixed financial holding company; (c) it has at least one subsidiary that is an institution; (d) more than 50 % of any of the following indicators are associated, on a steady basis, with subsidiaries that are institutions or financial institutions, and with activities carried out by the undertaking itself that are not related to the acquisition or owning of holdings in subsidiaries when those activities are of the same nature as the ones carried out by institutions or financial institutions: (i) the undertaking’s equity based on its consolidated situation; (ii) the undertaking’s assets based on its consolidated situation; (iii) the undertaking’s revenues based on its consolidated situation; (iv) the undertaking’s personnel based on its consolidated situation; (v) other indicators considered relevant by the competent authority"
+    },
+    {
+      "number": "20a",
+      "term": "investment holding company",
+      "text": "‘investment holding company’ means an investment holding company as defined in Article 4(1), point (23), of Regulation (EU) 2019/2033"
     },
     {
       "number": "21",
@@ -122,7 +132,12 @@
     {
       "number": "26",
       "term": "financial institution",
-      "text": "‘financial institution’ means an undertaking that meets both of the following conditions: (a) it is not an institution, a pure industrial holding company, a securitisation special purpose entity, an insurance holding company as defined in Article 212(1), point (f), of Directive 2009/138/EC or a mixed-activity insurance holding company as defined in Article 212(1), point (g), of that Directive, except where a mixed-activity insurance holding company has a subsidiary institution; (b) it meets one or more of the following conditions: (i) the principal activity of the undertaking is to acquire or own holdings or to pursue one or more of the activities listed in Annex I, points 2 to 12 and points 15, 16 and 17, to Directive 2013/36/EU, or to pursue one or more of the services or activities listed in Annex I, Section A or B, to Directive 2014/65/EU in relation to financial instruments listed in Annex I, Section C, to Directive 2014/65/EU; (ii) the undertaking is an investment firm, a mixed financial holding company, an investment holding company, a payment services provider as categorised under Article 1(1), points (a) to (d), of Directive (EU) 2015/2366 of the European Parliament and of the Council ( 11 ), an asset management company or an ancillary services undertaking; (26a) ‘pure industrial holding company’ means an undertaking that meets all of the following conditions: (a) its principal activity is to acquire or own holdings; (b) it is not referred to in point (27)(a), or point (27)(d) to (l), of this paragraph and is not an investment firm or an asset management company, or a payment service provider as categorised under Article 1(1), points (a) to (d), of Directive (EU) 2015/2366; (c) it does not hold any participations in a financial sector entity"
+      "text": "‘financial institution’ means an undertaking that meets both of the following conditions: (a) it is not an institution, a pure industrial holding company, a securitisation special purpose entity, an insurance holding company as defined in Article 212(1), point (f), of Directive 2009/138/EC or a mixed-activity insurance holding company as defined in Article 212(1), point (g), of that Directive, except where a mixed-activity insurance holding company has a subsidiary institution; (b) it meets one or more of the following conditions: (i) the principal activity of the undertaking is to acquire or own holdings or to pursue one or more of the activities listed in Annex I, points 2 to 12 and points 15, 16 and 17, to Directive 2013/36/EU, or to pursue one or more of the services or activities listed in Annex I, Section A or B, to Directive 2014/65/EU in relation to financial instruments listed in Annex I, Section C, to Directive 2014/65/EU; (ii) the undertaking is an investment firm, a mixed financial holding company, an investment holding company, a payment services provider as categorised under Article 1(1), points (a) to (d), of Directive (EU) 2015/2366 of the European Parliament and of the Council ( 11 ), an asset management company or an ancillary services undertaking"
+    },
+    {
+      "number": "26a",
+      "term": "pure industrial holding company",
+      "text": "‘pure industrial holding company’ means an undertaking that meets all of the following conditions: (a) its principal activity is to acquire or own holdings; (b) it is not referred to in point (27)(a), or point (27)(d) to (l), of this paragraph and is not an investment firm or an asset management company, or a payment service provider as categorised under Article 1(1), points (a) to (d), of Directive (EU) 2015/2366; (c) it does not hold any participations in a financial sector entity"
     },
     {
       "number": "27",
@@ -137,7 +152,27 @@
     {
       "number": "29",
       "term": "eu parent institution",
-      "text": "‘EU parent institution’ means a parent institution in a Member State which is not a subsidiary of another institution authorised in any Member State, or of a financial holding company or mixed financial holding company set up in any Member State; (29a) ‘parent investment firm in a Member State’ means a parent undertaking in a Member State that is an investment firm; (29b) ‘EU parent investment firm’ means an EU parent undertaking that is an investment firm; (29c) ‘parent credit institution in a Member State’ means a parent institution in a Member State that is a credit institution; (29d) ‘EU parent credit institution’ means an EU parent institution that is a credit institution"
+      "text": "‘EU parent institution’ means a parent institution in a Member State which is not a subsidiary of another institution authorised in any Member State, or of a financial holding company or mixed financial holding company set up in any Member State"
+    },
+    {
+      "number": "29a",
+      "term": "parent investment firm in a member state",
+      "text": "‘parent investment firm in a Member State’ means a parent undertaking in a Member State that is an investment firm"
+    },
+    {
+      "number": "29b",
+      "term": "eu parent investment firm",
+      "text": "‘EU parent investment firm’ means an EU parent undertaking that is an investment firm"
+    },
+    {
+      "number": "29c",
+      "term": "parent credit institution in a member state",
+      "text": "‘parent credit institution in a Member State’ means a parent institution in a Member State that is a credit institution"
+    },
+    {
+      "number": "29d",
+      "term": "eu parent credit institution",
+      "text": "‘EU parent credit institution’ means an EU parent institution that is a credit institution"
     },
     {
       "number": "30",
@@ -167,7 +202,7 @@
     {
       "number": "35",
       "term": "participation",
-      "text": "‘participation’ means a participating interest as defined in Article 2, point (2), of Directive 2013/34/EU of the European Parliament and of the Council ( 12 ), or the ownership, direct or indirect, of 20 % or more of the voting rights or capital of an undertaking"
+      "text": "‘participation’ means a participating interest as defined in Article 2, point (2), of Directive 2013/34/EU of the European Parliament and of the Council ( 12 ), or the ownership, direct or indirect, of 20 % or more of the voting rights or capital of an undertaking"
     },
     {
       "number": "36",
@@ -177,7 +212,7 @@
     {
       "number": "37",
       "term": "control",
-      "text": "‘control’ means the relationship between a parent undertaking and a subsidiary, as described in Article 22 of Directive 2013/34/EU, or in the accounting standards to which an institution is subject under Regulation (EC) No 1606/2002 of the European Parliament and of the Council ( 13 ), or a similar relationship between any natural or legal person and an undertaking"
+      "text": "‘control’ means the relationship between a parent undertaking and a subsidiary, as described in Article 22 of Directive 2013/34/EU, or in the accounting standards to which an institution is subject under Regulation (EC) No 1606/2002 of the European Parliament and of the Council ( 13 ), or a similar relationship between any natural or legal person and an undertaking"
     },
     {
       "number": "38",
@@ -252,7 +287,52 @@
     {
       "number": "52",
       "term": "operational risk",
-      "text": "‘operational risk’ means the risk of loss resulting from inadequate or failed internal processes, people and systems or from external events, including, but not limited to, legal risk, model risk or information and communication technology (ICT) risk, but excluding strategic and reputational risk; (52a) ‘legal risk’ means the risk of loss, including, expenses, fines, penalties or punitive damages, which an institution might incur as a consequence of events that result in legal proceedings, including the following: (a) supervisory actions and private settlements; (b) failure to act where action is necessary to comply with a legal obligation; (c) action taken to avoid compliance with a legal obligation; (d) misconduct events, which are events that arise from wilful or negligent misconduct, including inappropriate supply of financial services or the provision of inadequate or misleading information on the financial risk of products sold by the institution; (e) non-compliance with any requirement derived from national or international statutory or legislative provisions; (f) non-compliance with any requirement derived from contractual arrangements, or with internal rules and codes of conduct established in accordance with national or international rules and practices; (g) non-compliance with rules on ethics; (52b) ‘model risk’ means the risk of loss resulting from decisions that are principally based on the output of internal models, due to errors in the design, development, parameter estimation, implementation, use or monitoring of such models, including the following: (a) the improper design of a selected internal model and its characteristics; (b) the inadequate verification of a selected internal model’s suitability for the financial instrument to be evaluated or for the product to be priced, or of the selected internal model’s suitability for the applicable market conditions; (c) errors in the implementation of a selected internal model; (d) incorrect mark-to-market valuations and risk measurement as a result of an error when booking a trade into the trading system; (e) the use of a selected internal model or of its outputs for a purpose for which that model was not intended or designed, including manipulation of the modelling parameters; (f) the untimely or ineffective monitoring or validation of model performance or of the predictive ability to assess whether the selected internal model remains fit for purpose; (52c) ‘ICT risk’ means the risk of loss related to any reasonably identifiable circumstances related to the use of network and information systems which, if materialised, might compromise the security of the network and information systems, of any technology-dependent tool or process, of operations and processes, or of the provision of services, by producing adverse effects in the digital or physical environment; (52d) ‘environmental, social and governance risk’ or ‘ESG risk’ means the risk of any negative financial impact on an institution stemming from the current or prospective impact of environmental, social or governance (ESG) factors on that institution’s counterparties or invested assets; ESG risks materialise through the traditional categories of financial risks; (52e) ‘environmental risk’ means the risk of any negative financial impact on an institution stemming from the current or prospective impact of environmental factors on that institution’s counterparties or invested assets, including factors related to the transition towards the objectives set out in Article 9 of Regulation (EU) 2020/852 of the European Parliament and of the Council ( 14 ); environmental risk includes both physical risk and transition risk; (52f) ‘physical risk’, as part of the environmental risk, means the risk of any negative financial impact on an institution stemming from the current or prospective impact of the physical effects of environmental factors on that institution’s counterparties or invested assets; (52g) ‘transition risk’, as part of the environmental risk, means the risk of any negative financial impact on an institution stemming from the current or prospective impact of the transition to an environmentally sustainable economy on that institution’s counterparties or invested assets; (52h) ‘social risk’ means the risk of any negative financial impact on an institution stemming from the current or prospective impact of social factors on its counterparties or invested assets; (52i) ‘governance risk’ means the risk of any negative financial impact on an institution stemming from the current or prospective impact of governance factors on that institution’s counterparties or invested assets"
+      "text": "‘operational risk’ means the risk of loss resulting from inadequate or failed internal processes, people and systems or from external events, including, but not limited to, legal risk, model risk or information and communication technology (ICT) risk, but excluding strategic and reputational risk"
+    },
+    {
+      "number": "52a",
+      "term": "legal risk",
+      "text": "‘legal risk’ means the risk of loss, including, expenses, fines, penalties or punitive damages, which an institution might incur as a consequence of events that result in legal proceedings, including the following: (a) supervisory actions and private settlements; (b) failure to act where action is necessary to comply with a legal obligation; (c) action taken to avoid compliance with a legal obligation; (d) misconduct events, which are events that arise from wilful or negligent misconduct, including inappropriate supply of financial services or the provision of inadequate or misleading information on the financial risk of products sold by the institution; (e) non-compliance with any requirement derived from national or international statutory or legislative provisions; (f) non-compliance with any requirement derived from contractual arrangements, or with internal rules and codes of conduct established in accordance with national or international rules and practices; (g) non-compliance with rules on ethics"
+    },
+    {
+      "number": "52b",
+      "term": "model risk",
+      "text": "‘model risk’ means the risk of loss resulting from decisions that are principally based on the output of internal models, due to errors in the design, development, parameter estimation, implementation, use or monitoring of such models, including the following: (a) the improper design of a selected internal model and its characteristics; (b) the inadequate verification of a selected internal model’s suitability for the financial instrument to be evaluated or for the product to be priced, or of the selected internal model’s suitability for the applicable market conditions; (c) errors in the implementation of a selected internal model; (d) incorrect mark-to-market valuations and risk measurement as a result of an error when booking a trade into the trading system; (e) the use of a selected internal model or of its outputs for a purpose for which that model was not intended or designed, including manipulation of the modelling parameters; (f) the untimely or ineffective monitoring or validation of model performance or of the predictive ability to assess whether the selected internal model remains fit for purpose"
+    },
+    {
+      "number": "52c",
+      "term": "ict risk",
+      "text": "‘ICT risk’ means the risk of loss related to any reasonably identifiable circumstances related to the use of network and information systems which, if materialised, might compromise the security of the network and information systems, of any technology-dependent tool or process, of operations and processes, or of the provision of services, by producing adverse effects in the digital or physical environment"
+    },
+    {
+      "number": "52d",
+      "term": "environmental, social and governance risk",
+      "text": "‘environmental, social and governance risk’ or ‘ESG risk’ means the risk of any negative financial impact on an institution stemming from the current or prospective impact of environmental, social or governance (ESG) factors on that institution’s counterparties or invested assets; ESG risks materialise through the traditional categories of financial risks"
+    },
+    {
+      "number": "52e",
+      "term": "environmental risk",
+      "text": "‘environmental risk’ means the risk of any negative financial impact on an institution stemming from the current or prospective impact of environmental factors on that institution’s counterparties or invested assets, including factors related to the transition towards the objectives set out in Article 9 of Regulation (EU) 2020/852 of the European Parliament and of the Council ( 14 ); environmental risk includes both physical risk and transition risk"
+    },
+    {
+      "number": "52f",
+      "term": "physical risk",
+      "text": "‘physical risk’, as part of the environmental risk, means the risk of any negative financial impact on an institution stemming from the current or prospective impact of the physical effects of environmental factors on that institution’s counterparties or invested assets"
+    },
+    {
+      "number": "52g",
+      "term": "transition risk",
+      "text": "‘transition risk’, as part of the environmental risk, means the risk of any negative financial impact on an institution stemming from the current or prospective impact of the transition to an environmentally sustainable economy on that institution’s counterparties or invested assets"
+    },
+    {
+      "number": "52h",
+      "term": "social risk",
+      "text": "‘social risk’ means the risk of any negative financial impact on an institution stemming from the current or prospective impact of social factors on its counterparties or invested assets"
+    },
+    {
+      "number": "52i",
+      "term": "governance risk",
+      "text": "‘governance risk’ means the risk of any negative financial impact on an institution stemming from the current or prospective impact of governance factors on that institution’s counterparties or invested assets"
     },
     {
       "number": "53",
@@ -292,7 +372,12 @@
     {
       "number": "60",
       "term": "cash assimilated instrument",
-      "text": "‘cash assimilated instrument’ means a certificate of deposit, a bond, including a covered bond, or any other non-subordinated instrument, which has been issued by a lending institution, for which that lending institution has already received full payment and which shall be unconditionally reimbursed by the institution at its nominal value; (60a) ‘gold bullion’ means gold in the form of a commodity, including gold bars, ingots and coins, commonly accepted by the bullion market, where liquid markets for bullion exist, and the value of which is determined by the value of the gold content, defined by purity and mass, rather than by its interest to numismatists"
+      "text": "‘cash assimilated instrument’ means a certificate of deposit, a bond, including a covered bond, or any other non-subordinated instrument, which has been issued by a lending institution, for which that lending institution has already received full payment and which shall be unconditionally reimbursed by the institution at its nominal value"
+    },
+    {
+      "number": "60a",
+      "term": "gold bullion",
+      "text": "‘gold bullion’ means gold in the form of a commodity, including gold bars, ingots and coins, commonly accepted by the bullion market, where liquid markets for bullion exist, and the value of which is determined by the value of the gold content, defined by purity and mass, rather than by its interest to numismatists"
     },
     {
       "number": "61",
@@ -362,12 +447,47 @@
     {
       "number": "74",
       "term": "mortgage lending value",
-      "text": "‘mortgage lending value’ means the value of immovable property as determined by a prudent assessment of the future marketability of the property taking into account long-term sustainable aspects of the property, the normal and local market conditions, the current use and alternative appropriate uses of the property; (74a) ‘property value’ means the value of a residential property or commercial immovable property determined in accordance with Article 229(1)"
+      "text": "‘mortgage lending value’ means the value of immovable property as determined by a prudent assessment of the future marketability of the property taking into account long-term sustainable aspects of the property, the normal and local market conditions, the current use and alternative appropriate uses of the property"
+    },
+    {
+      "number": "74a",
+      "term": "property value",
+      "text": "‘property value’ means the value of a residential property or commercial immovable property determined in accordance with Article 229(1)"
     },
     {
       "number": "75",
       "term": "residential property",
-      "text": "‘residential property’ means any of the following: (a) an immovable property which has the nature of a dwelling and satisfies all applicable laws and regulations enabling the property to be occupied for housing purposes; (b) an immovable property which has the nature of a dwelling and is still under construction, provided that there is the expectation that the property will satisfy all applicable laws and regulations enabling the property to be occupied for housing purposes; (c) the right to inhabit an apartment in housing cooperatives located in Sweden; (d) land accessory to a property referred to in point (a), (b) or (c); (75a) ‘commercial immovable property’ means any immovable property that is not residential property; (75b) ‘income producing real estate exposure’ or ‘IPRE exposure’ means an exposure secured by one or more residential properties or commercial immovable properties where the fulfilment of the credit obligations related to the exposure materially depends on the cash flows generated by those immovable properties securing that exposure, rather than on the capacity of the obligor to fulfil the credit obligations from other sources; the primary source of such cash flows being lease or rental payments, or proceeds from the sale of the residential property or commercial immovable property; (75c) ‘non-income-producing real estate exposure’ or ‘non-IPRE exposure’ means any exposure secured by one or more residential properties or commercial immovable properties that is not an IPRE exposure; (75d) ‘exposure secured by residential property’ or ‘exposure secured by a mortgage on residential property’ means an exposure secured by residential property or an exposure regarded as such in accordance with Article 108(4); (75e) ‘exposure secured by commercial immovable property’ or ‘exposure secured by a mortgage on commercial immovable property’ means an exposure secured by a commercial immovable property; (75f) ‘exposure secured by immovable property’ or ‘exposure secured by a mortgage on immovable property’, or ‘exposure secured by immovable property collateral’ means an exposure secured by a residential property or commercial immovable property or an exposure regarded as such in accordance with Article 108(4)"
+      "text": "‘residential property’ means any of the following: (a) an immovable property which has the nature of a dwelling and satisfies all applicable laws and regulations enabling the property to be occupied for housing purposes; (b) an immovable property which has the nature of a dwelling and is still under construction, provided that there is the expectation that the property will satisfy all applicable laws and regulations enabling the property to be occupied for housing purposes; (c) the right to inhabit an apartment in housing cooperatives located in Sweden; (d) land accessory to a property referred to in point (a), (b) or (c)"
+    },
+    {
+      "number": "75a",
+      "term": "commercial immovable property",
+      "text": "‘commercial immovable property’ means any immovable property that is not residential property"
+    },
+    {
+      "number": "75b",
+      "term": "income producing real estate exposure",
+      "text": "‘income producing real estate exposure’ or ‘IPRE exposure’ means an exposure secured by one or more residential properties or commercial immovable properties where the fulfilment of the credit obligations related to the exposure materially depends on the cash flows generated by those immovable properties securing that exposure, rather than on the capacity of the obligor to fulfil the credit obligations from other sources; the primary source of such cash flows being lease or rental payments, or proceeds from the sale of the residential property or commercial immovable property"
+    },
+    {
+      "number": "75c",
+      "term": "non-income-producing real estate exposure",
+      "text": "‘non-income-producing real estate exposure’ or ‘non-IPRE exposure’ means any exposure secured by one or more residential properties or commercial immovable properties that is not an IPRE exposure"
+    },
+    {
+      "number": "75d",
+      "term": "exposure secured by residential property",
+      "text": "‘exposure secured by residential property’ or ‘exposure secured by a mortgage on residential property’ means an exposure secured by residential property or an exposure regarded as such in accordance with Article 108(4)"
+    },
+    {
+      "number": "75e",
+      "term": "exposure secured by commercial immovable property",
+      "text": "‘exposure secured by commercial immovable property’ or ‘exposure secured by a mortgage on commercial immovable property’ means an exposure secured by a commercial immovable property"
+    },
+    {
+      "number": "75f",
+      "term": "exposure secured by immovable property",
+      "text": "‘exposure secured by immovable property’ or ‘exposure secured by a mortgage on immovable property’, or ‘exposure secured by immovable property collateral’ means an exposure secured by a residential property or commercial immovable property or an exposure regarded as such in accordance with Article 108(4)"
     },
     {
       "number": "76",
@@ -382,7 +502,17 @@
     {
       "number": "78",
       "term": "one-year default rate",
-      "text": "‘one-year default rate’ means the ratio between the number of obligors or, where the definition of default is applied at credit facility level pursuant to Article 178(1), second subparagraph, credit facilities in respect of which a default is considered to have occurred during a period that starts from one year prior to a date of observation T, and the number of obligors, or where the definition of default is applied at credit facility level pursuant to Article 178(1), second subparagraph, credit facilities assigned to this grade or pool one year prior to that date of observation T; (78a) ‘land acquisition, development and construction exposures’, or ‘ADC exposures’, means exposures to corporates or special purpose entities financing any land acquisition for development and construction purposes, or financing the development and construction of any residential property or commercial immovable property; (78b) ‘non-ADC exposure’ means any exposure secured by one or more residential properties or commercial immovable properties that is not an ADC exposure"
+      "text": "‘one-year default rate’ means the ratio between the number of obligors or, where the definition of default is applied at credit facility level pursuant to Article 178(1), second subparagraph, credit facilities in respect of which a default is considered to have occurred during a period that starts from one year prior to a date of observation T, and the number of obligors, or where the definition of default is applied at credit facility level pursuant to Article 178(1), second subparagraph, credit facilities assigned to this grade or pool one year prior to that date of observation T"
+    },
+    {
+      "number": "78a",
+      "term": "land acquisition, development and construction exposures",
+      "text": "‘land acquisition, development and construction exposures’, or ‘ADC exposures’, means exposures to corporates or special purpose entities financing any land acquisition for development and construction purposes, or financing the development and construction of any residential property or commercial immovable property"
+    },
+    {
+      "number": "78b",
+      "term": "non-adc exposure",
+      "text": "‘non-ADC exposure’ means any exposure secured by one or more residential properties or commercial immovable properties that is not an ADC exposure"
     },
     {
       "number": "80",
@@ -477,7 +607,7 @@
     {
       "number": "98",
       "term": "external credit assessment institution",
-      "text": "‘external credit assessment institution’ or ‘ECAI’ means a credit rating agency that is registered or certified in accordance with Regulation (EC) No 1060/2009 of the European Parliament and of the Council of 16 September 2009 on credit rating agencies ( 15 ) or a central bank issuing credit ratings which are exempt from the application of Regulation (EC) No 1060/2009"
+      "text": "‘external credit assessment institution’ or ‘ECAI’ means a credit rating agency that is registered or certified in accordance with Regulation (EC) No 1060/2009 of the European Parliament and of the Council of 16 September 2009 on credit rating agencies ( 15 ) or a central bank issuing credit ratings which are exempt from the application of Regulation (EC) No 1060/2009"
     },
     {
       "number": "99",
@@ -640,14 +770,19 @@
       "text": "‘resolution authority’ means a resolution authority as defined in point"
     },
     {
+      "number": "130a",
+      "term": "relevant third-country authority",
+      "text": "‘relevant third-country authority’ means a third-country authority as defined in Article 2(1), point (90), of Directive 2014/59/EU"
+    },
+    {
       "number": "131",
       "term": "resolution entity",
-      "text": "‘resolution entity’ means a resolution entity as defined in point (83a) of Article 2(1) of Directive 2014/59/EU"
+      "text": "‘resolution entity’ means a resolution entity as defined in point"
     },
     {
       "number": "132",
       "term": "resolution group",
-      "text": "‘resolution group’ means a resolution group as defined in point (83b) of Article 2(1) of Directive 2014/59/EU"
+      "text": "‘resolution group’ means a resolution group as defined in point"
     },
     {
       "number": "133",
@@ -677,7 +812,7 @@
     {
       "number": "138",
       "term": "group",
-      "text": "‘group’ means a group of undertakings of which at least one is an institution and which consists of a parent undertaking and its subsidiaries, or of undertakings that are related to each other as set out in Article 22 of Directive 2013/34/EU of the European Parliament and of the Council ( 16 )"
+      "text": "‘group’ means a group of undertakings of which at least one is an institution and which consists of a parent undertaking and its subsidiaries, or of undertakings that are related to each other as set out in Article 22 of Directive 2013/34/EU of the European Parliament and of the Council ( 16 )"
     },
     {
       "number": "139",
@@ -732,7 +867,7 @@
     {
       "number": "149",
       "term": "financial report",
-      "text": "‘financial report’ means, for the purposes of Part Eight, a financial report within the meaning of Articles 4 and 5 of Directive 2004/109/EC of the European Parliament and of the Council ( 17 )"
+      "text": "‘financial report’ means, for the purposes of Part Eight, a financial report within the meaning of Articles 4 and 5 of Directive 2004/109/EC of the European Parliament and of the Council ( 17 )"
     },
     {
       "number": "150",
@@ -752,7 +887,7 @@
     {
       "number": "153",
       "term": "fossil fuel sector entity",
-      "text": "‘fossil fuel sector entity’ means a company, enterprise or undertaking statistically classified as having its principal economic activity in the coal, oil or gas sector of economic activities, as set out in Annex XXXIX, Template 3, to Commission Implementing Regulation (EU) 2021/637 ( 18 ) and as identified by reference to the statistical classification of economic activities (NACE Revision 2) codes listed in Annex I, Sections B, C, D and G, to Regulation (EC) No 1893/2006 of the European Parliament and of the Council ( 19 ); where the principal economic activity of a company, enterprise or undertaking is not classified using the NACE Revision 2 codes set out in Regulation (EC) No 1893/2006, or a national classification derived therefrom, institutions shall conservatively determine whether such company, enterprise or undertaking has its principal activity in one of those sectors"
+      "text": "‘fossil fuel sector entity’ means a company, enterprise or undertaking statistically classified as having its principal economic activity in the coal, oil or gas sector of economic activities, as set out in Annex XXXIX, Template 3, to Commission Implementing Regulation (EU) 2021/637 ( 18 ) and as identified by reference to the statistical classification of economic activities (NACE Revision 2) codes listed in Annex I, Sections B, C, D and G, to Regulation (EC) No 1893/2006 of the European Parliament and of the Council ( 19 ); where the principal economic activity of a company, enterprise or undertaking is not classified using the NACE Revision 2 codes set out in Regulation (EC) No 1893/2006, or a national classification derived therefrom, institutions shall conservatively determine whether such company, enterprise or undertaking has its principal activity in one of those sectors"
     },
     {
       "number": "154",

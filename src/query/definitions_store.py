@@ -21,8 +21,8 @@ ARTICLE_4_NUM = "4"
 # Two formats used across languages:
 #   English:  (1) 'term' means ...    → anchored with opening paren
 #   Italian:  1) «term» significa ... → no opening paren
-_DEF_SPLIT_RE_PAREN = re.compile(r"(?<!\w)\((\d+)\)\s+")   # EN: (N)
-_DEF_SPLIT_RE_BARE  = re.compile(r"(?<!\w)(\d+)\)\s+")     # IT: N)
+_DEF_SPLIT_RE_PAREN = re.compile(r"(?<!\w)\((\d+[a-z]?)\)\s+")                    # EN: (N) or (Na)
+_DEF_SPLIT_RE_BARE  = re.compile(r"(?<!\w)(\d+(?:\s*(?:bis|ter|quater)|[a-z])?)\)\s+")  # IT: N), Na), N bis), N ter)
 
 # Extract quoted term from start of each definition body.
 # Handles straight quotes, Unicode curly quotes (EN and IT), and guillemets.
@@ -120,7 +120,8 @@ class DefinitionsStore:
         2. Split on ``(N)`` boundaries (digits only — skips sub-items like ``(a)``).
         3. For each (number, segment): extract leading quoted term via _TERM_RE.
         """
-        # Step 1: normalise whitespace
+        # Step 1: normalise whitespace (including non-breaking spaces used in IT numbering)
+        text = text.replace("\xa0", " ")
         text = re.sub(r"[ \t\r\n]+", " ", text).strip()
 
         # Step 2: detect format and split on definition boundaries.

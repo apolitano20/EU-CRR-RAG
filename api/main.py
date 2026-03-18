@@ -37,7 +37,7 @@ from src.ingestion.language_config import get_config
 from src.query.query_engine import (
     QueryEngine, QueryResult, LLM_MODEL,
     _LEGAL_QA_TEMPLATE, _LEGAL_QA_TEMPLATE_WITH_HISTORY,
-    _format_history, _rewrite_query_with_history,
+    _format_history, _rewrite_query_with_history, _truncate_context,
 )
 
 logger = logging.getLogger(__name__)
@@ -268,7 +268,7 @@ async def query_stream(request: QueryRequest) -> StreamingResponse:
             art_title = meta.get("article_title", "")
             header = f"Article {art}" + (f" — {art_title}" if art_title else "")
             context_parts.append(f"{header}\n\n{node.node.get_content()}")
-        context_str = "\n\n---\n\n".join(context_parts)
+        context_str = _truncate_context("\n\n---\n\n".join(context_parts))
 
         history_str = _format_history(history_dicts)
         if history_str:

@@ -39,7 +39,10 @@ RETRIEVAL_TOP_K = 12       # first-stage candidates passed to reranker
 RERANK_TOP_N = 6           # final results after reranking
 SIMILARITY_CUTOFF = 0.3
 RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
-LLM_MODEL = "gpt-4o"
+LLM_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+# Approximate token budget for synthesis context (~4 chars/token, leave 4k headroom).
+# Prevents rate-limit errors on large articles (e.g. Article 4 definitions).
+MAX_CONTEXT_CHARS = int(os.getenv("MAX_CONTEXT_CHARS", str(100_000)))
 RETRIEVAL_ALPHA: float = float(os.getenv("RETRIEVAL_ALPHA", "0.5"))
 _HISTORY_MAX_TURNS = 5
 
@@ -233,6 +236,30 @@ def _ref_sort_key(a: str) -> tuple[int, str]:
     """
     m = re.match(r"^(\d+)(.*)", a)
     return (int(m.group(1)), m.group(2)) if m else (0, a)
+
+
+def _truncate_context(context_str: str, max_chars: int = MAX_CONTEXT_CHARS) -> str:
+    """Hard-truncate context to stay within the token budget.
+
+    Cuts at the last article separator boundary (---) before the limit so we
+    don't split mid-article. Falls back to a hard character cut if no separator
+    is found within the window.
+    """
+    if len(context_str) <= max_chars:
+        return context_str
+    window = context_str[:max_chars]
+    cut = window.rfind("\n\n---\n\n")
+    if cut > 0:
+        logger.warning(
+            "Context truncated from %d to %d chars to stay within token budget.",
+            len(context_str), cut,
+        )
+        return context_str[:cut]
+    logger.warning(
+        "Context hard-truncated from %d to %d chars (no article boundary found).",
+        len(context_str), max_chars,
+    )
+    return window
 
 
 def _normalise_query(query: str) -> str:
@@ -459,7 +486,7 @@ class QueryEngine:
             art_title = meta.get("article_title", "")
             header = f"Article {art}" + (f" — {art_title}" if art_title else "")
             context_parts.append(f"{header}\n\n{node.node.get_content()}")
-        context_str = "\n\n---\n\n".join(context_parts)
+        context_str = _truncate_context("\n\n---\n\n".join(context_parts))
 
         # Stage 3: LLM synthesis — call OpenAI directly with optional history injection
         t_syn = time.perf_counter()

@@ -7,7 +7,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
+
+# Install CPU-only PyTorch first to avoid downloading the 2.5 GB CUDA wheel.
+# The CPU wheel (~200 MB) is sufficient — no GPU is used at inference time.
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Pre-download BGE-M3 (570 MB) at build time so the first query is not
+# blocked by a cold model download inside the running container.
+RUN python -c "from FlagEmbedding import BGEM3FlagModel; BGEM3FlagModel('BAAI/bge-m3', use_fp16=False)"
 
 COPY . .
 

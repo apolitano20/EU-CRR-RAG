@@ -26,6 +26,7 @@ from src.query.query_engine import (
     QueryEngine,
     QueryResult,
     LLM_MODEL,
+    USE_PARAGRAPH_CHUNKING,
     _EVAL_KWARGS,
     _LEGAL_QA_TEMPLATE,
     _LEGAL_QA_TEMPLATE_WITH_HISTORY,
@@ -736,12 +737,46 @@ class QueryOrchestrator:
     def _build_context(self, all_nodes: list) -> str:
         """Build article-labelled context string from retrieved nodes."""
         context_parts = []
-        for node in all_nodes:
-            meta = node.node.metadata
-            art = meta.get("article", "")
-            art_title = meta.get("article_title", "")
-            header = f"Article {art}" + (f" — {art_title}" if art_title else "")
-            context_parts.append(f"{header}\n\n{node.node.get_content()}")
+        if USE_PARAGRAPH_CHUNKING:
+            # PARAGRAPH chunks retrieved — fetch parent ARTICLE docs for full synthesis context.
+            article_order: list[str] = []
+            _seen_arts: set[str] = set()
+            node_language: Optional[str] = None
+            for node in all_nodes:
+                meta = node.node.metadata
+                art = meta.get("article", "")
+                if not node_language:
+                    node_language = meta.get("language")
+                if art and art not in _seen_arts:
+                    _seen_arts.add(art)
+                    article_order.append(art)
+            for art in article_order:
+                fetch_conds: list[tuple[str, str]] = [("article", art), ("chunk_type", "ARTICLE")]
+                if node_language:
+                    fetch_conds.append(("language", node_language))
+                art_nodes = self._engine._fetch_nodes_direct(fetch_conds, top_k=1)
+                if art_nodes:
+                    art_node = art_nodes[0].node
+                    art_title = art_node.metadata.get("article_title", "")
+                    header = f"Article {art}" + (f" — {art_title}" if art_title else "")
+                    content = art_node.metadata.get("display_text") or art_node.get_content()
+                    context_parts.append(f"{header}\n\n{content}")
+                else:
+                    # Fallback: use paragraph chunk text directly if ARTICLE doc not found
+                    for node in all_nodes:
+                        if node.node.metadata.get("article") == art:
+                            meta = node.node.metadata
+                            art_title = meta.get("article_title", "")
+                            header = f"Article {art}" + (f" — {art_title}" if art_title else "")
+                            context_parts.append(f"{header}\n\n{node.node.get_content()}")
+                            break
+        else:
+            for node in all_nodes:
+                meta = node.node.metadata
+                art = meta.get("article", "")
+                art_title = meta.get("article_title", "")
+                header = f"Article {art}" + (f" — {art_title}" if art_title else "")
+                context_parts.append(f"{header}\n\n{node.node.get_content()}")
         return _truncate_context("\n\n---\n\n".join(context_parts))
 
     def _select_prompt(

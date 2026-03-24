@@ -170,7 +170,8 @@ class VectorStore:
         Qdrant requires an index on any field used in a filter. This method is
         idempotent — calling it on a collection that already has the indexes is safe.
         """
-        for field in ("language", "article", "level", "annex_id", "part", "title", "chapter", "section"):
+        for field in ("language", "article", "level", "annex_id", "part", "title", "chapter", "section",
+                      "chunk_type", "parent_article_id", "para_id"):
             self._client.create_payload_index(
                 collection_name=self.collection_name,
                 field_name=field,

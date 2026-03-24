@@ -54,6 +54,9 @@ TITLE_BOOST_WEIGHT: float = float(os.getenv("TITLE_BOOST_WEIGHT", "0.15"))
 ADJACENT_TIEBREAK_DELTA: float = float(os.getenv("ADJACENT_TIEBREAK_DELTA", "0.0"))
 # Max paragraph windows to score per article in ParagraphWindowReranker (latency guard).
 PARAGRAPH_WINDOW_MAX_WINDOWS: int = int(os.getenv("PARAGRAPH_WINDOW_MAX_WINDOWS", "4"))
+# When true, the index contains PARAGRAPH-level chunks in addition to ARTICLE docs.
+# Retrieval filters to PARAGRAPH chunks; context assembly fetches the parent ARTICLE docs.
+USE_PARAGRAPH_CHUNKING: bool = os.getenv("USE_PARAGRAPH_CHUNKING", "false").lower() == "true"
 _HISTORY_MAX_TURNS = 5
 # When EVAL_MODE=true all internal LLM calls use temperature=0 for reproducibility.
 EVAL_MODE: bool = os.getenv("EVAL_MODE", "false").lower() == "true"
@@ -979,16 +982,31 @@ class QueryEngine:
 
         new_para_reranker = None
         if os.getenv("USE_PARAGRAPH_WINDOW_RERANKER", "false").lower() == "true":
-            new_para_reranker = ParagraphWindowReranker(
-                model=RERANKER_MODEL,
-                top_n=RERANK_TOP_N,
-                alpha=RERANK_BLEND_ALPHA,
-                max_windows=PARAGRAPH_WINDOW_MAX_WINDOWS,
-            )
-            logger.info(
-                "ParagraphWindowReranker enabled (model=%s, top_n=%d, max_windows=%d)",
-                RERANKER_MODEL, RERANK_TOP_N, PARAGRAPH_WINDOW_MAX_WINDOWS,
-            )
+            if USE_PARAGRAPH_CHUNKING:
+                # ParagraphWindowReranker is redundant when the index already contains
+                # paragraph-level chunks — each chunk IS already a paragraph window.
+                # Fall back to BlendedReranker to avoid double-splitting paragraph text.
+                logger.warning(
+                    "USE_PARAGRAPH_WINDOW_RERANKER=true is redundant with USE_PARAGRAPH_CHUNKING=true. "
+                    "Falling back to BlendedReranker."
+                )
+                if new_reranker is None:
+                    new_reranker = BlendedReranker(
+                        model=RERANKER_MODEL,
+                        top_n=RERANK_TOP_N,
+                        alpha=RERANK_BLEND_ALPHA,
+                    )
+            else:
+                new_para_reranker = ParagraphWindowReranker(
+                    model=RERANKER_MODEL,
+                    top_n=RERANK_TOP_N,
+                    alpha=RERANK_BLEND_ALPHA,
+                    max_windows=PARAGRAPH_WINDOW_MAX_WINDOWS,
+                )
+                logger.info(
+                    "ParagraphWindowReranker enabled (model=%s, top_n=%d, max_windows=%d)",
+                    RERANKER_MODEL, RERANK_TOP_N, PARAGRAPH_WINDOW_MAX_WINDOWS,
+                )
 
         new_engine = self._build_engine(new_vector_index)
 
@@ -1202,12 +1220,47 @@ class QueryEngine:
 
         # Build article-labelled context string (mirrors stream endpoint)
         context_parts = []
-        for node in all_nodes_for_synthesis:
-            meta = node.node.metadata
-            art = meta.get("article", "")
-            art_title = meta.get("article_title", "")
-            header = f"Article {art}" + (f" — {art_title}" if art_title else "")
-            context_parts.append(f"{header}\n\n{node.node.get_content()}")
+        if USE_PARAGRAPH_CHUNKING:
+            # PARAGRAPH chunks retrieved — fetch parent ARTICLE docs for full synthesis context.
+            # Group by article in score order (first occurrence = best-ranked article).
+            article_order: list[str] = []
+            _seen_arts: set[str] = set()
+            node_language = language
+            for node in all_nodes_for_synthesis:
+                meta = node.node.metadata
+                art = meta.get("article", "")
+                if not node_language:
+                    node_language = meta.get("language", "")
+                if art and art not in _seen_arts:
+                    _seen_arts.add(art)
+                    article_order.append(art)
+            for art in article_order:
+                fetch_conds: list[tuple[str, str]] = [("article", art), ("chunk_type", "ARTICLE")]
+                if node_language:
+                    fetch_conds.append(("language", node_language))
+                art_nodes = self._fetch_nodes_direct(fetch_conds, top_k=1)
+                if art_nodes:
+                    art_node = art_nodes[0].node
+                    art_title = art_node.metadata.get("article_title", "")
+                    header = f"Article {art}" + (f" — {art_title}" if art_title else "")
+                    content = art_node.metadata.get("display_text") or art_node.get_content()
+                    context_parts.append(f"{header}\n\n{content}")
+                else:
+                    # Fallback: use paragraph chunk text directly if ARTICLE doc not found
+                    for node in all_nodes_for_synthesis:
+                        if node.node.metadata.get("article") == art:
+                            meta = node.node.metadata
+                            art_title = meta.get("article_title", "")
+                            header = f"Article {art}" + (f" — {art_title}" if art_title else "")
+                            context_parts.append(f"{header}\n\n{node.node.get_content()}")
+                            break
+        else:
+            for node in all_nodes_for_synthesis:
+                meta = node.node.metadata
+                art = meta.get("article", "")
+                art_title = meta.get("article_title", "")
+                header = f"Article {art}" + (f" — {art_title}" if art_title else "")
+                context_parts.append(f"{header}\n\n{node.node.get_content()}")
         context_str = _truncate_context("\n\n---\n\n".join(context_parts))
 
         # Stage 3: LLM synthesis — call OpenAI directly with optional history injection
@@ -1359,6 +1412,8 @@ class QueryEngine:
                 conditions = [("article", ref_art)]
                 if language:
                     conditions.append(("language", language))
+                if USE_PARAGRAPH_CHUNKING:
+                    conditions.append(("chunk_type", "ARTICLE"))
                 results = self._fetch_nodes_direct(conditions, top_k=1)
                 expanded.extend(results)
                 _seen.add(ref_art)
@@ -1546,6 +1601,8 @@ class QueryEngine:
         conditions: list[tuple[str, str]] = [("article", article_num)]
         if language:
             conditions.append(("language", language))
+        if USE_PARAGRAPH_CHUNKING:
+            conditions.append(("chunk_type", "PARAGRAPH"))
         return self._fetch_nodes_direct(conditions, top_k=50)
 
     # ------------------------------------------------------------------
@@ -1703,20 +1760,17 @@ class QueryEngine:
         vector_index: VectorStoreIndex,
         language_filter: Optional[str] = None,
     ) -> RetrieverQueryEngine:
-        # Optional metadata filter for language-scoped retrieval
-        filters = (
-            MetadataFilters(
-                filters=[
-                    MetadataFilter(
-                        key="language",
-                        value=language_filter,
-                        operator=FilterOperator.EQ,
-                    )
-                ]
+        # Optional metadata filters: language + chunk_type (when paragraph chunking is active)
+        filter_list = []
+        if language_filter:
+            filter_list.append(
+                MetadataFilter(key="language", value=language_filter, operator=FilterOperator.EQ)
             )
-            if language_filter
-            else None
-        )
+        if USE_PARAGRAPH_CHUNKING:
+            filter_list.append(
+                MetadataFilter(key="chunk_type", value="PARAGRAPH", operator=FilterOperator.EQ)
+            )
+        filters = MetadataFilters(filters=filter_list) if filter_list else None
 
         # Articles are self-contained units — no AutoMergingRetriever needed
         vector_retriever = vector_index.as_retriever(

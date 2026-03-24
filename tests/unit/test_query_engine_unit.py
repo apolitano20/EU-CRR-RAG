@@ -120,15 +120,18 @@ class TestRetrieveWithFilters:
         result = qe._retrieve_with_filters(filters=MagicMock(), query_str="q", top_k=1)
         assert result == default_nodes
 
-    def test_does_not_call_default_when_hybrid_succeeds(self):
-        nodes = [_make_node("art_4_en", "4")]
-        qe = self._engine(hybrid_results=nodes, default_results=[_make_node("art_4_en", "4")])
+    def test_does_not_call_hybrid_when_default_succeeds(self):
+        # DEFAULT is tried first (faster for metadata-filtered lookups); if it returns
+        # results HYBRID is never called. Renamed from the old HYBRID-first test when
+        # the retrieval order was inverted (DEFAULT first, HYBRID fallback).
+        default_nodes = [_make_node("art_4_en", "4")]
+        qe = self._engine(hybrid_results=default_nodes, default_results=default_nodes)
         filters = MagicMock()
         qe._retrieve_with_filters(filters=filters, query_str="Article 4", top_k=1)
-        # Only one call to as_retriever — HYBRID was enough
+        # Only one call to as_retriever — DEFAULT was enough
         assert qe._vector_index.as_retriever.call_count == 1
         call_kwargs = qe._vector_index.as_retriever.call_args[1]
-        assert call_kwargs["vector_store_query_mode"] == VectorStoreQueryMode.HYBRID
+        assert call_kwargs["vector_store_query_mode"] == VectorStoreQueryMode.DEFAULT
 
 
 # ---------------------------------------------------------------------------
@@ -369,14 +372,14 @@ class TestExpandCrossReferences:
         source = _make_node("art_92_en", "92")
         source.node.metadata = {"article": "92", "referenced_articles": refs_csv}
 
-        def fake_retrieve(filters, query_str, top_k):
-            # Extract article number from query_str ("Article N")
-            art = query_str.split()[-1]
+        def fake_fetch(conditions, top_k=1):
+            # Extract article number from conditions: [("article", "N"), ...]
+            art = next(v for k, v in conditions if k == "article")
             if art in failing_articles:
                 raise RuntimeError(f"Simulated fetch failure for Article {art}")
             return [_make_node(f"art_{art}_en", art)]
 
-        qe._retrieve_with_filters = MagicMock(side_effect=fake_retrieve)
+        qe._fetch_nodes_direct = MagicMock(side_effect=fake_fetch)
         return qe, [source]
 
     def test_refs_fetched_in_numeric_order(self):
@@ -384,8 +387,8 @@ class TestExpandCrossReferences:
         qe, source_nodes = self._engine_with_refs("114,26,4")
         qe._expand_cross_references(source_nodes, language=None, limit=3)
 
-        call_args = [call[1]["query_str"] for call in qe._retrieve_with_filters.call_args_list]
-        fetched_articles = [q.split()[-1] for q in call_args]
+        call_args = [call[0][0] for call in qe._fetch_nodes_direct.call_args_list]
+        fetched_articles = [next(v for k, v in conds if k == "article") for conds in call_args]
         # Article 4 is skipped by the definitions fast-path guard
         assert fetched_articles == ["26", "114"], (
             f"Expected numeric order [26, 114] (Article 4 skipped) but got {fetched_articles}"
@@ -447,19 +450,18 @@ class TestExpandCrossReferencesAnnex:
             "referenced_annexes": referenced_annexes,
         }
 
-        def fake_retrieve(filters, query_str, top_k):
-            # Annex fetches use "Annex X" as query_str
-            parts = query_str.split()
-            if parts[0] == "Annex":
-                anx = parts[1]
+        def fake_fetch(conditions, top_k=1):
+            # Distinguish article vs annex by which key is present
+            cond_dict = dict(conditions)
+            if "annex_id" in cond_dict:
+                anx = cond_dict["annex_id"]
                 if anx in failing_annexes:
                     raise RuntimeError(f"Simulated fetch failure for Annex {anx}")
                 return [_make_annex_node(f"anx_{anx}_en", anx)]
-            # Article fetches
-            art = query_str.split()[-1]
+            art = cond_dict.get("article", "")
             return [_make_node(f"art_{art}_en", art)]
 
-        qe._retrieve_with_filters = MagicMock(side_effect=fake_retrieve)
+        qe._fetch_nodes_direct = MagicMock(side_effect=fake_fetch)
         return qe, [source]
 
     def test_annex_refs_fetched(self):
@@ -483,11 +485,11 @@ class TestExpandCrossReferencesAnnex:
         qe, source_nodes = self._engine_with_annex_refs("IV,I,II")
         qe._expand_cross_references(source_nodes, language=None, limit=5)
         annex_calls = [
-            call[1]["query_str"]
-            for call in qe._retrieve_with_filters.call_args_list
-            if call[1]["query_str"].startswith("Annex")
+            dict(call[0][0])
+            for call in qe._fetch_nodes_direct.call_args_list
+            if "annex_id" in dict(call[0][0])
         ]
-        fetched_order = [q.split()[1] for q in annex_calls]
+        fetched_order = [c["annex_id"] for c in annex_calls]
         assert fetched_order == ["I", "II", "IV"]
 
 
@@ -597,3 +599,277 @@ class TestRetrievalAlpha:
 
         call_kwargs = qe._vector_index.as_retriever.call_args[1]
         assert call_kwargs.get("alpha") == 0.3
+
+
+# ---------------------------------------------------------------------------
+# _expand_synonyms
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestExpandSynonyms:
+    """_expand_synonyms inlines canonical CRR terms next to user paraphrases."""
+
+    def _expand(self, text: str) -> str:
+        from src.query.query_engine import _expand_synonyms
+        return _expand_synonyms(text)
+
+    def test_expands_preference_shares(self):
+        result = self._expand("What are preference shares requirements?")
+        assert "preference shares" in result
+        assert "Additional Tier 1 instruments" in result
+
+    def test_expands_subordinated_debt(self):
+        result = self._expand("Can subordinated debt count as capital?")
+        assert "subordinated debt" in result
+        assert "Tier 2 instruments" in result
+
+    def test_no_change_when_no_synonym(self):
+        q = "What is the minimum CET1 ratio under Article 92?"
+        assert self._expand(q) == q
+
+    def test_case_insensitive(self):
+        result = self._expand("Are Preference Shares eligible?")
+        assert "Additional Tier 1 instruments" in result
+
+    def test_normalise_query_calls_expand_synonyms(self):
+        """_normalise_query pipeline includes synonym expansion."""
+        from src.query.query_engine import _normalise_query
+        result = _normalise_query("What counts as preference shares?")
+        assert "Additional Tier 1 instruments" in result
+
+
+# ---------------------------------------------------------------------------
+# _enrich_open_ended_query
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestEnrichOpenEndedQuery:
+    """_enrich_open_ended_query appends predicted article numbers to open-ended queries."""
+
+    def _enrich(self, query: str, hints: str) -> str:
+        from src.query.query_engine import _enrich_open_ended_query
+        with patch("openai.OpenAI") as mock_openai:
+            mock_resp = MagicMock()
+            mock_resp.choices[0].message.content = hints
+            mock_openai.return_value.chat.completions.create.return_value = mock_resp
+            return _enrich_open_ended_query(query, api_key="test-key")
+
+    def test_appends_article_hints(self):
+        result = self._enrich("What is the minimum leverage ratio?", "429, 429a")
+        assert "What is the minimum leverage ratio?" in result
+        assert "429" in result
+
+    def test_returns_original_on_invalid_hints(self):
+        """Hints that don't look like article numbers (e.g. a full sentence) are ignored."""
+        query = "What is the minimum leverage ratio?"
+        result = self._enrich(query, "I'm not sure, maybe article 92 or so?")
+        assert result == query
+
+    def test_returns_original_on_empty_hints(self):
+        query = "What are own funds requirements?"
+        result = self._enrich(query, "")
+        assert result == query
+
+    def test_returns_original_on_api_failure(self):
+        from src.query.query_engine import _enrich_open_ended_query
+        with patch("openai.OpenAI", side_effect=RuntimeError("network error")):
+            query = "What is the LCR minimum?"
+            result = _enrich_open_ended_query(query, api_key="test-key")
+            assert result == query
+
+
+# ---------------------------------------------------------------------------
+# _generate_hyde_query
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestGenerateHydeQuery:
+    """_generate_hyde_query returns a combined HyDE passage + article hints."""
+
+    def _hyde(self, query: str, llm_output: str) -> str:
+        from src.query.query_engine import _generate_hyde_query
+        with patch("openai.OpenAI") as mock_openai:
+            mock_resp = MagicMock()
+            mock_resp.choices[0].message.content = llm_output
+            mock_openai.return_value.chat.completions.create.return_value = mock_resp
+            return _generate_hyde_query(query, api_key="test-key")
+
+    def test_combines_passage_and_article_hints(self):
+        llm_output = (
+            "PASSAGE: Institutions shall maintain a total risk exposure amount (TREA) "
+            "calculated in accordance with Article 92(3).\n"
+            "ARTICLES: 92, 93"
+        )
+        result = self._hyde("What is TREA?", llm_output)
+        assert "total risk exposure amount" in result
+        assert "[Relevant CRR articles: 92, 93]" in result
+
+    def test_passage_only_when_articles_missing(self):
+        """Valid passage with no ARTICLES line → return passage without hints suffix."""
+        llm_output = "PASSAGE: Institutions shall meet own funds requirements under Article 92."
+        result = self._hyde("What are own funds requirements?", llm_output)
+        assert "own funds requirements" in result
+        assert "Relevant CRR articles" not in result
+
+    def test_passage_only_when_articles_invalid(self):
+        """ARTICLES line containing non-numeric text is ignored."""
+        llm_output = (
+            "PASSAGE: The leverage ratio is calculated under Article 429.\n"
+            "ARTICLES: I'm not sure, maybe 429?"
+        )
+        result = self._hyde("What is the leverage ratio?", llm_output)
+        assert "leverage ratio" in result
+        assert "I'm not sure" not in result
+
+    def test_returns_original_on_empty_response(self):
+        query = "What is the leverage ratio requirement?"
+        result = self._hyde(query, "")
+        assert result == query
+
+    def test_returns_original_on_api_failure(self):
+        from src.query.query_engine import _generate_hyde_query
+        with patch("openai.OpenAI", side_effect=RuntimeError("network error")):
+            query = "What is the minimum CET1 ratio?"
+            result = _generate_hyde_query(query, api_key="test-key")
+            assert result == query
+
+
+# ---------------------------------------------------------------------------
+# _generate_sub_queries
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestGenerateSubQueries:
+    """_generate_sub_queries breaks multi-hop questions into simpler sub-queries."""
+
+    def _generate(self, query: str, llm_output: str) -> list:
+        from src.query.query_engine import _generate_sub_queries
+        with patch("openai.OpenAI") as mock_openai:
+            mock_resp = MagicMock()
+            mock_resp.choices[0].message.content = llm_output
+            mock_openai.return_value.chat.completions.create.return_value = mock_resp
+            return _generate_sub_queries(query, api_key="test-key")
+
+    def test_returns_up_to_three_sub_queries(self):
+        output = "What is the IRB approach?\nWhat are the PD requirements?\nHow are LGD floors applied?"
+        result = self._generate("Compare IRB and SA approaches", output)
+        assert len(result) == 3
+
+    def test_strips_numbering_from_output(self):
+        output = "1. What is CET1?\n2. What is AT1?\n3. What is T2?"
+        result = self._generate("Explain capital tiers", output)
+        for q in result:
+            assert not q[0].isdigit() or q.startswith("What")
+
+    def test_caps_at_three(self):
+        output = "Q1\nQ2\nQ3\nQ4\nQ5"
+        result = self._generate("Complex query", output)
+        assert len(result) <= 3
+
+    def test_returns_empty_on_api_failure(self):
+        from src.query.query_engine import _generate_sub_queries
+        with patch("openai.OpenAI", side_effect=RuntimeError("timeout")):
+            result = _generate_sub_queries("Complex query", api_key="test-key")
+            assert result == []
+
+
+# ---------------------------------------------------------------------------
+# ArticleTitleBoostPostprocessor
+# ---------------------------------------------------------------------------
+
+def _make_titled_node(
+    node_id: str,
+    article_title: str,
+    score: float = 0.5,
+) -> MagicMock:
+    node = MagicMock()
+    node.node.node_id = node_id
+    node.node.metadata = {"article_title": article_title}
+    node.node.get_content.return_value = f"content of {node_id}"
+    node.score = score
+    return node
+
+
+@pytest.mark.unit
+class TestArticleTitleBoostPostprocessor:
+    """ArticleTitleBoostPostprocessor: score boost, sort, and truncation logic."""
+
+    def _booster(self, weight: float = 0.15, top_n: int = 3):
+        from src.query.query_engine import ArticleTitleBoostPostprocessor
+        return ArticleTitleBoostPostprocessor(boost_weight=weight, top_n=top_n)
+
+    def _bundle(self, query: str):
+        from llama_index.core.schema import QueryBundle
+        return QueryBundle(query_str=query)
+
+    def test_matching_title_boosts_score(self):
+        """Query tokens that overlap with article title should increase the score."""
+        booster = self._booster()
+        node = _make_titled_node("n1", "Own funds requirements", score=0.5)
+        result = booster._postprocess_nodes([node], self._bundle("own funds"))
+        assert result[0].score > 0.5
+
+    def test_no_match_no_boost(self):
+        """Unrelated title should leave score unchanged."""
+        booster = self._booster()
+        node = _make_titled_node("n1", "Leverage ratio calculation", score=0.5)
+        result = booster._postprocess_nodes([node], self._bundle("own funds"))
+        assert result[0].score == pytest.approx(0.5)
+
+    def test_empty_title_no_boost(self):
+        """Empty article_title should not error and not change score."""
+        booster = self._booster()
+        node = _make_titled_node("n1", "", score=0.4)
+        result = booster._postprocess_nodes([node], self._bundle("own funds"))
+        assert result[0].score == pytest.approx(0.4)
+
+    def test_stopwords_ignored(self):
+        """Stopwords ('requirements', 'institutions') should not be counted as matches."""
+        booster = self._booster()
+        # Title and query share only stopwords — no match, no boost
+        node = _make_titled_node("n1", "General requirements for institutions", score=0.5)
+        result = booster._postprocess_nodes([node], self._bundle("requirements institutions"))
+        # After stopword removal both sets are empty or disjoint — score unchanged
+        assert result[0].score == pytest.approx(0.5)
+
+    def test_partial_match_proportional(self):
+        """Boost should scale with the match_ratio (partial overlap < full overlap)."""
+        booster = self._booster(weight=0.15, top_n=2)
+        full_match = _make_titled_node("n_full", "capital ratio", score=0.5)
+        partial_match = _make_titled_node("n_partial", "capital leverage ratio", score=0.5)
+        q = self._bundle("capital ratio")
+        r_full = booster._postprocess_nodes([full_match], q)
+        booster2 = self._booster(weight=0.15, top_n=2)
+        full_match2 = _make_titled_node("n_full2", "capital ratio", score=0.5)
+        partial_match2 = _make_titled_node("n_partial2", "capital leverage ratio", score=0.5)
+        r_partial = booster2._postprocess_nodes([partial_match2], q)
+        assert r_full[0].score >= r_partial[0].score
+
+    def test_sorts_and_truncates(self):
+        """Output must be sorted descending by score and limited to top_n."""
+        booster = self._booster(weight=0.15, top_n=2)
+        nodes = [
+            _make_titled_node("n1", "Own funds requirements", score=0.9),
+            _make_titled_node("n2", "Leverage ratio", score=0.8),
+            _make_titled_node("n3", "Eligible capital", score=0.7),
+        ]
+        result = booster._postprocess_nodes(nodes, self._bundle("own funds"))
+        assert len(result) == 2
+        assert result[0].score >= result[1].score
+
+    def test_abbreviation_expansion_matches(self):
+        """Expanded abbreviations in query should match title tokens."""
+        # After abbreviation expansion, "TREA" becomes "Total Risk Exposure Amount"
+        booster = self._booster()
+        node = _make_titled_node("n1", "Total Risk Exposure Amount", score=0.4)
+        result = booster._postprocess_nodes(
+            [node], self._bundle("Total Risk Exposure Amount")
+        )
+        assert result[0].score > 0.4
+
+    def test_zero_weight_no_boost(self):
+        """weight=0 means no modification to scores."""
+        booster = self._booster(weight=0.0, top_n=3)
+        node = _make_titled_node("n1", "Own funds requirements", score=0.5)
+        result = booster._postprocess_nodes([node], self._bundle("own funds"))
+        assert result[0].score == pytest.approx(0.5)

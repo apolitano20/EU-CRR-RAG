@@ -2,17 +2,18 @@
 FastAPI application for the EU CRR RAG system.
 
 Endpoints:
-  POST /api/query   – submit a compliance question, get answer + sources
-  POST /api/ingest  – trigger the ingestion pipeline
+  POST /api/query        – submit a compliance question, get answer + sources
+  POST /api/query/stream – streaming version via SSE
+  POST /api/ingest       – trigger the ingestion pipeline
 """
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
-import time
+import re
 import threading
+import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -20,10 +21,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import faulthandler as _faulthandler
+_faulthandler.enable()  # print native crash tracebacks to stderr
+
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from src.utils.logging_config import setup_logging
@@ -34,11 +37,8 @@ from src.indexing.index_builder import HierarchicalIndexer
 from src.indexing.vector_store import VectorStore
 from src.ingestion.eurlex_ingest import EurLexIngester
 from src.ingestion.language_config import get_config
-from src.query.query_engine import (
-    QueryEngine, QueryResult, LLM_MODEL,
-    _LEGAL_QA_TEMPLATE, _LEGAL_QA_TEMPLATE_WITH_HISTORY,
-    _format_history, _rewrite_query_with_history, _truncate_context,
-)
+from src.query.orchestrator import QueryOrchestrator, detect_language
+from src.query.query_engine import QueryEngine, QueryResult
 
 logger = logging.getLogger(__name__)
 
@@ -49,10 +49,16 @@ logger = logging.getLogger(__name__)
 _vector_store = VectorStore()
 _indexer = HierarchicalIndexer(vector_store=_vector_store)
 _query_engine = QueryEngine(vector_store=_vector_store, indexer=_indexer)
+_orchestrator = QueryOrchestrator(query_engine=_query_engine)
 _ingestion_lock = threading.Lock()
+_warmup_ok: bool = False
 
 
 _REQUIRED_ENV_VARS = ("OPENAI_API_KEY", "QDRANT_URL", "QDRANT_API_KEY")
+
+# Server-side deadline for /api/query. Prevents FastAPI's sync-worker pool from
+# filling up with hung requests that never return.
+_QUERY_TIMEOUT = int(os.getenv("QUERY_TIMEOUT_SECONDS", "150"))
 
 
 @asynccontextmanager
@@ -63,20 +69,35 @@ async def lifespan(app: FastAPI):
 
     logger.info("Loading query engine from persisted index...")
     try:
-        _query_engine.load()
+        _orchestrator.load()
         logger.info("Query engine ready.")
     except FileNotFoundError:
         logger.warning(
             "No persisted index found. Run ingestion first: "
             "python -m src.pipelines.ingest_pipeline"
         )
+
+    # Pre-warm the BGE-M3 sparse encoder so it is in memory before the first
+    # query arrives.  Without this, the first batch of concurrent eval requests
+    # all block on _model_lock while the 570 MB model loads, causing timeouts.
+    global _warmup_ok
+    try:
+        from src.indexing.bge_m3_sparse import _encode_query_both
+        logger.info("Pre-warming BGE-M3 sparse encoder…")
+        # Runs dense + sparse in a single lock acquisition, matching the hot path.
+        _encode_query_both("warm-up")
+        logger.info("BGE-M3 warm-up complete.")
+        _warmup_ok = True
+    except Exception as exc:
+        logger.warning("BGE-M3 warm-up skipped: %s", exc)
+
     yield
 
 
 app = FastAPI(
     title="EU CRR RAG API",
     description="Regulatory compliance Q&A over EU Capital Requirements Regulation (CRR).",
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
@@ -86,6 +107,15 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def _global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.error("GLOBAL_EXC_HANDLER: %s: %s", type(exc).__name__, exc, exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"{type(exc).__name__}: {exc}"},
+    )
 
 
 @app.middleware("http")
@@ -181,143 +211,74 @@ class FeedbackResponse(BaseModel):
 
 
 # ------------------------------------------------------------------
-# Language detection heuristic
-# ------------------------------------------------------------------
-
-
-def _detect_language(text: str) -> Optional[str]:
-    """Guess query language from character set. Returns None for no filter (cross-language).
-
-    Limitations (acceptable for EN/IT/PL MVP):
-    - Polish is detected reliably via its unique diacritics (ą ć ę ł ń ś ź ż).
-    - Italian detection uses àèéìíîòóùú, which are also present in French, Romanian,
-      and Portuguese. Queries in those languages will be incorrectly routed to the
-      Italian index. If additional Romance languages are added, replace this heuristic
-      with a proper language-detection library (e.g. langdetect or lingua-py).
-    - Plain English (no diacritics) always returns None → cross-language retrieval.
-    """
-    if set(text) & set("ąćęłńóśźżĄĆĘŁŃÓŚŹŻ"):
-        return "pl"
-    if set(text) & set("àèéìíîòóùúÀÈÉÌÍÎÒÓÙÚ"):
-        return "it"
-    return None  # no filter → cross-language retrieval
-
-
-# ------------------------------------------------------------------
 # Endpoints
 # ------------------------------------------------------------------
 
 
 @app.post("/api/query", response_model=QueryResponse)
-def query(request: QueryRequest) -> QueryResponse:
-    if not _query_engine.is_loaded():
+async def query(request: QueryRequest) -> QueryResponse:
+    if not _orchestrator.is_loaded():
         raise HTTPException(
             status_code=503,
             detail="Index not loaded. Run ingestion first.",
         )
 
-    lang = request.preferred_language or _detect_language(request.query)
+    lang = request.preferred_language  # None → orchestrator auto-detects
     history_dicts = [t.model_dump() for t in request.history]
-    result: QueryResult = _query_engine.query(
-        request.query,
-        language=lang,
-        max_cross_ref_expansions=request.max_cross_ref_expansions,
-        history=history_dicts,
-    )
-    return QueryResponse(
-        answer=result.answer,
-        sources=result.sources,
-        trace_id=result.trace_id,
-        language=lang,
-    )
-
-
-async def _stream_definition_result(result: QueryResult, lang: Optional[str]):
-    """Yield SSE events for a pre-resolved definition result (no LLM call needed)."""
-    yield f"data: {json.dumps({'type': 'token', 'content': result.answer})}\n\n"
-    yield f"data: {json.dumps({'type': 'sources', 'sources': result.sources, 'trace_id': result.trace_id, 'language': lang})}\n\n"
-    yield 'data: {"type": "done"}\n\n'
+    cancel = threading.Event()
+    try:
+        result: QueryResult = await asyncio.wait_for(
+            asyncio.to_thread(
+                _orchestrator.query,
+                request.query,
+                language=lang,
+                max_cross_ref_expansions=request.max_cross_ref_expansions,
+                history=history_dicts,
+                cancel=cancel,
+            ),
+            timeout=_QUERY_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        cancel.set()  # signal the background thread to stop at the next checkpoint
+        raise HTTPException(status_code=504, detail=f"Query timed out after {_QUERY_TIMEOUT}s.")
+    except BaseException as exc:
+        logger.error("Query failed: %s: %s", type(exc).__name__, exc, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Query processing failed: {type(exc).__name__}: {exc}",
+        )
+    # Resolve final language for response (explicit preference or auto-detected)
+    try:
+        response_lang = lang or detect_language(request.query)
+        return QueryResponse(
+            answer=result.answer,
+            sources=result.sources,
+            trace_id=result.trace_id,
+            language=response_lang,
+        )
+    except Exception as exc:
+        logger.error("Response construction failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Response construction failed: {type(exc).__name__}: {exc}",
+        )
 
 
 @app.post("/api/query/stream")
 async def query_stream(request: QueryRequest) -> StreamingResponse:
-    if not _query_engine.is_loaded():
+    if not _orchestrator.is_loaded():
         raise HTTPException(status_code=503, detail="Index not loaded. Run ingestion first.")
 
-    lang = request.preferred_language or _detect_language(request.query)
+    lang = request.preferred_language  # None → orchestrator auto-detects
     history_dicts = [t.model_dump() for t in request.history]
 
-    # Rewrite follow-up query in a thread before retrieval
-    effective_query = request.query
-    if history_dicts:
-        effective_query = await asyncio.to_thread(
-            _rewrite_query_with_history,
-            request.query, history_dicts,
-            os.getenv("OPENAI_API_KEY"), LLM_MODEL,
-        )
-        if effective_query != request.query:
-            logger.info("Stream query rewritten: '%s' → '%s'", request.query, effective_query)
-
-    # Definitions fast-path — skip retrieval and LLM for Article 4 queries
-    if not history_dicts:
-        def_result = await asyncio.to_thread(
-            _query_engine.lookup_definition, effective_query, lang
-        )
-        if def_result is not None:
-            return StreamingResponse(
-                _stream_definition_result(def_result, lang),
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
-
-    # Run synchronous retrieval in a thread to avoid blocking the event loop
-    all_nodes, sources, trace_id, normalised_query, _engine = await asyncio.to_thread(
-        _query_engine.retrieve,
-        effective_query,
-        lang,
-        request.max_cross_ref_expansions,
-    )
-
-    async def generate():
-        # Build article-labelled context string
-        context_parts = []
-        for node in all_nodes:
-            meta = node.node.metadata
-            art = meta.get("article", "")
-            art_title = meta.get("article_title", "")
-            header = f"Article {art}" + (f" — {art_title}" if art_title else "")
-            context_parts.append(f"{header}\n\n{node.node.get_content()}")
-        context_str = _truncate_context("\n\n---\n\n".join(context_parts))
-
-        history_str = _format_history(history_dicts)
-        if history_str:
-            prompt = _LEGAL_QA_TEMPLATE_WITH_HISTORY.format(
-                history_str=history_str, context_str=context_str, query_str=normalised_query
-            )
-        else:
-            prompt = _LEGAL_QA_TEMPLATE.format(
-                context_str=context_str,
-                query_str=normalised_query,
-            )
-
-        client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        stream = await client.chat.completions.create(
-            model=LLM_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            stream=True,
-            timeout=120.0,
-        )
-
-        async for chunk in stream:
-            delta = chunk.choices[0].delta.content
-            if delta:
-                yield f"data: {json.dumps({'type': 'token', 'content': delta})}\n\n"
-
-        yield f"data: {json.dumps({'type': 'sources', 'sources': sources, 'trace_id': trace_id, 'language': lang})}\n\n"
-        yield 'data: {"type": "done"}\n\n'
-
     return StreamingResponse(
-        generate(),
+        _orchestrator.query_stream(
+            request.query,
+            lang,
+            history_dicts,
+            request.max_cross_ref_expansions,
+        ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -325,7 +286,7 @@ async def query_stream(request: QueryRequest) -> StreamingResponse:
 
 @app.get("/api/article/{article_id}", response_model=ArticleResponse)
 def get_article(article_id: str, language: Optional[str] = None) -> ArticleResponse:
-    if not _query_engine.is_loaded():
+    if not _orchestrator.is_loaded():
         raise HTTPException(
             status_code=503,
             detail="Index not loaded. Run ingestion first.",
@@ -342,7 +303,7 @@ def get_article(article_id: str, language: Optional[str] = None) -> ArticleRespo
 @app.get("/api/article/{article_id}/citing", response_model=CitingArticlesResponse)
 def get_citing_articles(article_id: str, language: Optional[str] = None) -> CitingArticlesResponse:
     """Return all articles that reference the given article number."""
-    if not _query_engine.is_loaded():
+    if not _orchestrator.is_loaded():
         raise HTTPException(
             status_code=503,
             detail="Index not loaded. Run ingestion first.",
@@ -357,10 +318,9 @@ def get_citing_articles(article_id: str, language: Optional[str] = None) -> Citi
 
 @app.post("/api/feedback", response_model=FeedbackResponse)
 def submit_feedback(request: FeedbackRequest) -> FeedbackResponse:
-    import re
     from pathlib import Path
 
-    cases_dir = Path("evals/cases")
+    cases_dir = Path("evals/cases/manual_cases")
     cases_dir.mkdir(parents=True, exist_ok=True)
 
     existing = list(cases_dir.glob("case_*.md"))
@@ -403,7 +363,7 @@ def submit_feedback(request: FeedbackRequest) -> FeedbackResponse:
     lines += ["## Feedback / Notes", "", request.feedback, ""]
 
     (cases_dir / filename).write_text("\n".join(lines), encoding="utf-8")
-    logger.info("Feedback saved to evals/cases/%s", filename)
+    logger.info("Feedback saved to evals/cases/manual_cases/%s", filename)
     return FeedbackResponse(status="ok", filename=filename)
 
 
@@ -421,7 +381,7 @@ def ingest(request: IngestRequest, background_tasks: BackgroundTasks) -> IngestR
                 vector_store=_vector_store, reset_store=request.reset
             )
             indexer.build(docs)
-            _query_engine.load()
+            _orchestrator.load()
         finally:
             _ingestion_lock.release()
 
@@ -429,10 +389,46 @@ def ingest(request: IngestRequest, background_tasks: BackgroundTasks) -> IngestR
     return IngestResponse(status="started", message="Ingestion started in background.")
 
 
+@app.get("/api/debug/crash-test")
+def debug_crash_test() -> JSONResponse:
+    """Run case_161 synchronously (in the main thread) with faulthandler to capture native crashes."""
+    import faulthandler
+    import traceback as _tb
+    debug_log = "case161_api_debug.log"
+    with open(debug_log, "w") as fh:
+        faulthandler.enable(fh)
+        fh.write("=== crash-test start ===\n")
+        fh.flush()
+        try:
+            query = (
+                "For an exposure to a corporate without an external rating, what is the risk weight, "
+                "and how does this compare to an exposure to an unrated institution assigned to Grade B?"
+            )
+            from src.query.orchestrator import _MULTI_HOP_RE
+            fh.write(f"is_multi_hop: {bool(_MULTI_HOP_RE.search(query))}\n")
+            fh.flush()
+            result = _orchestrator.query(query, language="en")
+            fh.write(f"SUCCESS: {result.answer[:200]}\n")
+        except BaseException as exc:
+            fh.write(f"EXCEPTION: {type(exc).__name__}: {exc}\n")
+            _tb.print_exc(file=fh)
+        finally:
+            fh.write("=== crash-test end ===\n")
+            faulthandler.disable()
+    return JSONResponse({"status": "done", "log": debug_log})
+
+
 @app.get("/health")
-def health() -> dict:
-    return {
-        "status": "ok",
-        "index_loaded": _query_engine.is_loaded(),
-        "vector_store_items": _vector_store.item_count,
-    }
+def health() -> JSONResponse:
+    loaded = _orchestrator.is_loaded()
+    ready = loaded and _warmup_ok
+    status_code = 200 if ready else 503
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "status": "ok" if ready else "degraded",
+            "index_loaded": loaded,
+            "warmup_ok": _warmup_ok,
+            "vector_store_items": _vector_store.item_count,
+        },
+    )

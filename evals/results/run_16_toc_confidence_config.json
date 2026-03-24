@@ -1,0 +1,36 @@
+{
+  "run_name": "run_16_toc_confidence",
+  "run_timestamp": "20260324T135401Z",
+  "description": "Post-retrieval ToC gating: ToC fires only when max reranker score < 0.55, targeting diluted_embedding/false_friend without penalising high-confidence retrievals. Sequential (not parallel) to avoid unconditional latency overhead seen in run_15.",
+  "git_commit": "bb2ff7d",
+  "eval": {
+    "dataset_path": "evals\\cases\\golden_dataset.jsonl",
+    "api_url": "http://localhost:8080",
+    "workers": 3,
+    "limit": null,
+    "case_ids": null,
+    "judge_enabled": false,
+    "judge_model": null
+  },
+  "retrieval": {
+    "top_k": 15,
+    "alpha": 0.5,
+    "similarity_cutoff": 0.3,
+    "use_reranker": true,
+    "reranker_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+    "rerank_top_n": 6,
+    "rerank_blend_alpha": 0.3,
+    "title_boost_weight": 0.0,
+    "adjacent_tiebreak_delta": 0.05
+  },
+  "synthesis": {
+    "llm_model": "gpt-4o-mini",
+    "hard_query_model": "gpt-4o",
+    "max_context_chars": 100000
+  },
+  "query_pipeline": {
+    "use_hyde": false,
+    "use_toc_routing": true,
+    "use_query_enrichment": true
+  }
+}

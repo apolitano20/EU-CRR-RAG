@@ -1,0 +1,35 @@
+{
+  "run_name": "run_2e_baseline",
+  "run_timestamp": "20260324T103625Z",
+  "description": null,
+  "git_commit": "bb2ff7d",
+  "eval": {
+    "dataset_path": "evals\\cases\\golden_dataset.jsonl",
+    "api_url": "http://localhost:8080",
+    "workers": 1,
+    "limit": null,
+    "case_ids": null,
+    "judge_enabled": true,
+    "judge_model": "gpt-4o"
+  },
+  "retrieval": {
+    "top_k": 15,
+    "alpha": 0.5,
+    "similarity_cutoff": 0.3,
+    "use_reranker": true,
+    "reranker_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+    "rerank_top_n": 6,
+    "rerank_blend_alpha": 0.3,
+    "title_boost_weight": 0.0
+  },
+  "synthesis": {
+    "llm_model": "gpt-4o-mini",
+    "hard_query_model": "gpt-4o",
+    "max_context_chars": 100000
+  },
+  "query_pipeline": {
+    "use_hyde": false,
+    "use_toc_routing": false,
+    "use_query_enrichment": true
+  }
+}

@@ -14,6 +14,7 @@ rag_review_qa_for_claude_code.md
 # Runtime artifacts
 docstore/
 chroma_db/
+toc/
 
 # Environment
 .env

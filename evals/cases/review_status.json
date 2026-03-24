@@ -1,0 +1,246 @@
+{
+  "case_001": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_002": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_011": {
+    "status": "approved",
+    "note": "Approved. Made a minor change: added \"after having notified the competent authority\" to the deduction condition."
+  },
+  "case_029": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_031": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_033": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_034": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_037": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_038": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_039": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_044": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_055": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_056": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_059": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_061": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_064": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_074": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_076": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_082": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_091": {
+    "status": "approved",
+    "note": "Reference answer replaced: added 55% cap, fixed risk weight framing, added Art 208 + Art 229(1) for both types, Art 124(3)(c) and fully-constructed condition for commercial."
+  },
+  "case_094": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_097": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_021": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_022": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_003": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_004": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_005": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_006": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_007": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_008": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_009": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_010": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_012": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_014": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_013": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_015": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_016": {
+    "status": "approved",
+    "note": "Incomplete: Article 62 lists multiple Tier 2 items (a)-(d), but the Answer only mentions point (a).\n\nCorrect Answer:\nAccording to Article 62, Tier 2 items consist of:\n\n(a) capital instruments where the conditions set out in Article 63 are met, and to the extent specified in Article 64;\n\n(b) the share premium accounts related to instruments referred to in point (a);\n\n(c) for institutions calculating risk-weighted exposure amounts in accordance with Chapter 2 of Title II of Part Three, general credit risk adjustments, gross of tax effects, of up to 1.25% of those risk-weighted exposure amounts;\n\n(d) for institutions calculating risk-weighted exposure amounts in accordance with Part Three, Title II, Chapter 3, the IRB excess, where applicable, gross of tax effects, of up to 0.6% of those risk-weighted exposure amounts."
+  },
+  "case_017": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_018": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_019": {
+    "status": "approved",
+    "note": "Key issues:\n- Correctly identifies that items under point (a) do not qualify as CET1 or AT1.\n- The sentence 'This ensures that...' introduces interpretation not present in the GT.\n\nCorrect Answer:\nAccording to Article 62, items included under point (a), namely capital instruments where the conditions set out in Article 63 are met and to the extent specified in Article 64, shall not qualify as Common Equity Tier 1 or Additional Tier 1 items."
+  },
+  "case_020": {
+    "status": "approved",
+    "note": "Answer should retrieve other relevant articles.\n\nRecommended answer:\n\nAccording to Article 71, the Tier 2 capital of an institution consists of its Tier 2 items after deductions referred to in Article 66 and after the application of Article 79.\n\nTier 2 items (Article 62) include:\n\n(a) capital instruments where the conditions set out in Article 63 are met, and to the extent specified in Article 64;\n\n(b) the share premium accounts related to those instruments;\n\n(c) for institutions using Chapter 2 of Title II of Part Three, general credit risk adjustments, gross of tax effects, up to 1.25% of risk-weighted exposure amounts;\n\n(d) for institutions using Part Three, Title II, Chapter 3, the IRB excess, where applicable, gross of tax effects, up to 0.6% of risk-weighted exposure amounts.\n\nDeductions from Tier 2 items (Article 66) include:\n\n(a) direct, indirect and synthetic holdings of own Tier 2 instruments;\n\n(b) holdings of Tier 2 instruments of financial sector entities with reciprocal cross holdings;\n\n(c) applicable amounts of holdings in Tier 2 instruments of financial sector entities without significant investment;\n\n(d) holdings of Tier 2 instruments of financial sector entities with significant investment (excluding certain underwriting positions);\n\n(e) amounts required to be deducted from eligible liabilities items that exceed those items.\n\nApplication of Article 79:\n\nCompetent authorities may temporarily waive deductions where holdings are for the purpose of financial assistance to restore viability of an entity."
+  },
+  "case_147": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_148": {
+    "status": "approved",
+    "note": "2. Key issues:\n\nThe Answer correctly cites Article 411(5) (definition of unencumbered assets), but:\nThe GT does not explicitly state that only unencumbered assets can be counted as liquid assets under Article 412.\nThe conclusion that encumbered assets cannot be counted as available liquid resources is not explicitly stated in the provided GT.\nArticle 412 sets a general requirement to hold liquid assets, but does not specify eligibility criteria (e.g. unencumbered requirement) in the provided text.\n\n3. Final judgment:\nThe Answer is directionally correct but not strictly grounded in the GT, as it infers a rule not explicitly stated in the provided provisions.\n\nSuggested Answer:\nArticle 411(5) defines unencumbered assets as assets that are not subject to any legal, contractual, regulatory or other restriction preventing the institution from liquidating or otherwise disposing of them.\n\nArticle 412(1) requires institutions to hold liquid assets to cover liquidity outflows under stressed conditions, but it does not specify in the provided text whether encumbered or unencumbered assets qualify.\n\nTherefore, while cash and government bonds pledged as collateral would not meet the definition of unencumbered assets in Article 411(5), the provided provisions do not explicitly state that only unencumbered assets may be counted as liquid assets for the purposes of Article 412."
+  },
+  "case_144": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_145": {
+    "status": "approved",
+    "note": "1. Verdict: Partially correct\n\n2. Key issues:\n\nCorrectly states that double counting is not allowed (Article 412(2)).\nHowever, the Answer extends the rule beyond what is explicitly stated:\nArticle 412(2) prohibits double counting of liquidity outflows, liquidity inflows, and liquid assets, but does not explicitly describe the specific scenario of counting the same item as both an inflow and a liquid asset.\nIncludes additional detail about outflow category selection, which is present in GT but not directly relevant to the question.\n\n3. Final judgment:\nThe Answer is broadly correct but not strictly grounded, as it generalises the prohibition beyond the explicit wording of the GT.\n\nRecommended answer:\nNo. Article 412(2) states that institutions shall not double count liquidity outflows, liquidity inflows, and liquid assets.\n\nTherefore, even if an asset could qualify under more than one category, it cannot be counted more than once for the purposes of the liquidity coverage requirement."
+  },
+  "case_146": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_138": {
+    "status": "approved",
+    "note": "Reference answer revised: removed unsupported interpretation about preference shares ('typically exclude') and long-term debt via Article 63. Answer is now strictly grounded in GT: accumulated earnings eligible under Art 26(1)(c), other instruments must meet Art 28/29 conditions, Art 62 bars T2 items from CET1."
+  },
+  "case_142": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_152": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_163": {
+    "status": "approved",
+    "note": "Reference answer revised: removed corporate (Art 122(2)) treatment which was not in the provided GT. Answer now covers only local authorities via Art 115(1) and explicitly acknowledges that the GT does not specify treatment for unrated corporates."
+  },
+  "case_167": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_045": {
+    "status": "approved",
+    "note": "Suggested answer - Investment firms qualifying under Article 96(1) — namely those dealing on own account solely to execute client orders or access clearing systems in an agency capacity, and those meeting the four conditions in Article 96(1)(b) — are subject to a specific total risk exposure amount calculation under Article 96(2), in lieu of the standard calculation under Article 92(3).\nUnder Article 96(2), the total risk exposure amount is the sum of:\n(a) The amounts calculated under Article 92(4), points (a) to (e) and point (g), after applying Article 92(6). This covers risk-weighted exposure amounts for credit risk, counterparty credit risk, dilution risk, trading book market risk, foreign exchange and commodity risk, settlement risk, CVA risk, and counterparty credit risk from trading book transactions. Notably, Article 92(4)(f) — the operational risk own funds requirement — is excluded.\n(b) The fixed overheads requirement under Article 97, multiplied by 12.5. This converts the fixed overheads capital floor into a risk exposure equivalent and serves as a proxy for operational risk for these investment firms, replacing the Article 92(4)(f) component excluded under point (a).\nThe exclusion of Article 92(4)(f) and its replacement by the Article 97 fixed overheads measure reflects the limited business model of qualifying investment firms, for which a fixed overheads-based capital floor is considered a more appropriate operational risk proxy than the standard own funds requirement."
+  },
+  "case_108": {
+    "status": "approved",
+    "note": ""
+  },
+  "case_109": {
+    "status": "approved",
+    "note": "Suggested answer:\n\nPending the specification of a uniform definition of high and extremely high liquidity and credit quality under Article 460, Article 416(1) establishes a two-tier interim identification process.\nIdentification process\nInstitutions must themselves identify, in a given currency, transferable assets that are respectively of high or extremely high liquidity and credit quality (Art. 416(1), second subparagraph). The process operates as follows:\n\nWhere competent authorities have issued general guidance based on the criteria in Article 509(3), (4) and (5), institutions must follow that guidance.\nIn the absence of such guidance, institutions must apply transparent and objective criteria, drawing on some or all of the criteria listed in Article 509(3), (4) and (5).\n\nInteraction with reporting requirements\nAssets identified as meeting the liquidity and credit quality threshold may only be reported as liquid assets if they also satisfy the general conditions in Article 416(3): they must be unencumbered or available within collateral pools, not self-issued or issued by related entities, objectively priced, and listed or tradable on repurchase markets. However, the pricing and tradability conditions in Article 416(3)(c) and (d) do not apply to assets under Article 416(1)(a), (e) and (f) — cash and central bank exposures, standby central bank facilities, and network funding — which are subject to a lighter conditions regime.\nBeyond the primary reporting framework under paragraphs 1 to 3, Article 416(4) establishes an additional, parallel reporting layer, also pending Article 460 and also referencing Article 509(3), (4) and (5) as the criteria baseline. Under this layer, institutions must separately report:\n\nNon-central-bank-eligible but tradable assets such as equities and gold (Art. 416(4)(a));\nCentral-bank-eligible and tradable assets such as highest credit quality ABS (Art. 416(4)(b));\nCentral-bank-eligible but non-tradable assets such as credit claims (Art. 416(4)(c)).\n\nThis means the Article 509 criteria operate at two levels simultaneously: as the basis for identifying assets eligible for the primary liquid asset buffer under paragraphs 1 to 3, and as the basis for the supplementary reporting under paragraph 4. The full reporting obligation therefore requires institutions to apply the same criteria framework across both layers, with the Article 460 uniform definition serving as the endpoint that will eventually replace the entire interim regime."
+  },
+  "case_026": {
+    "status": "approved"
+  },
+  "case_036": {
+    "status": "approved"
+  },
+  "case_047": {
+    "status": "approved"
+  },
+  "case_053": {
+    "status": "approved"
+  },
+  "case_083": {
+    "status": "approved"
+  },
+  "case_092": {
+    "status": "approved"
+  },
+  "case_104": {
+    "status": "approved"
+  },
+  "case_168": {
+    "status": "approved"
+  },
+  "case_161": {
+    "status": "approved",
+    "note": "Reference answer verified correct: Art. 122(2) = 100% for unrated corporates; Art. 121(3) Table 1 Grade B = 50% for short-term, 75% for non-short-term. Automated review flag was stale (based on older incorrect reference answer)."
+  }
+}

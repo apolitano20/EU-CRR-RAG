@@ -17,10 +17,11 @@ import openai  # raw sync client — distinct from llama_index.llms.openai.OpenA
 
 from llama_index.core import Settings, VectorStoreIndex
 from llama_index.core.postprocessor import SimilarityPostprocessor
+from llama_index.core.postprocessor.types import BaseNodePostprocessor
 from llama_index.core.prompts import PromptTemplate
 from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core.response_synthesizers import get_response_synthesizer
-from llama_index.core.schema import QueryBundle
+from llama_index.core.schema import NodeWithScore, QueryBundle, TextNode
 from llama_index.core.vector_stores.types import (
     FilterOperator,
     MetadataFilter,
@@ -35,25 +36,319 @@ from src.indexing.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 
-RETRIEVAL_TOP_K = 12       # first-stage candidates passed to reranker
-RERANK_TOP_N = 6           # final results after reranking
+RETRIEVAL_TOP_K = int(os.getenv("RETRIEVAL_TOP_K", "12"))
+RERANK_TOP_N = int(os.getenv("RERANK_TOP_N", "6"))
 SIMILARITY_CUTOFF = 0.3
-RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
+RERANKER_MODEL = os.getenv("RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+# Blend weight for retrieval score vs reranker score (0=pure reranker, 1=pure retrieval).
+# 0.3 means 30% retrieval signal + 70% reranker signal.
+RERANK_BLEND_ALPHA: float = float(os.getenv("RERANK_BLEND_ALPHA", "0.3"))
 LLM_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 # Approximate token budget for synthesis context (~4 chars/token, leave 4k headroom).
 # Prevents rate-limit errors on large articles (e.g. Article 4 definitions).
 MAX_CONTEXT_CHARS = int(os.getenv("MAX_CONTEXT_CHARS", str(100_000)))
 RETRIEVAL_ALPHA: float = float(os.getenv("RETRIEVAL_ALPHA", "0.5"))
+TITLE_BOOST_WEIGHT: float = float(os.getenv("TITLE_BOOST_WEIGHT", "0.15"))
+# Maximum score gap between rank-1 and rank-2 nodes for the adjacent-article tiebreaker to fire.
+# 0.0 = disabled. Recommended starting value: 0.05.
+ADJACENT_TIEBREAK_DELTA: float = float(os.getenv("ADJACENT_TIEBREAK_DELTA", "0.0"))
+# Max paragraph windows to score per article in ParagraphWindowReranker (latency guard).
+PARAGRAPH_WINDOW_MAX_WINDOWS: int = int(os.getenv("PARAGRAPH_WINDOW_MAX_WINDOWS", "4"))
 _HISTORY_MAX_TURNS = 5
+# When EVAL_MODE=true all internal LLM calls use temperature=0 for reproducibility.
+EVAL_MODE: bool = os.getenv("EVAL_MODE", "false").lower() == "true"
+_EVAL_KWARGS: dict = {"temperature": 0} if EVAL_MODE else {}
+
+
+_reranker_lock = threading.Lock()
+"""Serialises cross-encoder predict() calls across concurrent workers.
+
+CrossEncoder (sentence-transformers) is NOT thread-safe: concurrent predict()
+calls on the same model instance can corrupt internal PyTorch state, causing
+non-Python native crashes that bypass except Exception handlers.  This lock
+serialises ALL reranker predictions without requiring a separate model instance
+per thread, keeping memory usage constant regardless of worker count.
+"""
+
+
+class BlendedReranker(BaseNodePostprocessor):
+    """Cross-encoder reranker with score blending.
+
+    Instead of letting the reranker fully override retrieval scores, blends:
+        final = alpha * retrieval_score + (1 - alpha) * normalised_reranker_score
+
+    This preserves strong retrieval signals (preventing rank flips on adjacent
+    articles) while still benefiting from cross-encoder cross-attention.
+    Reranker logits are min-max normalised within each batch before blending.
+    """
+
+    def __init__(self, model: str, top_n: int, alpha: float) -> None:
+        super().__init__()
+        from sentence_transformers import CrossEncoder
+        self._model = CrossEncoder(model)
+        self._top_n = top_n
+        self._alpha = alpha  # weight for retrieval score
+
+    @classmethod
+    def class_name(cls) -> str:
+        return "BlendedReranker"
+
+    def _postprocess_nodes(
+        self,
+        nodes: list[NodeWithScore],
+        query_bundle: QueryBundle | None = None,
+    ) -> list[NodeWithScore]:
+        if not nodes or query_bundle is None:
+            return nodes
+
+        query = query_bundle.query_str
+        pairs = [(query, n.node.get_content()) for n in nodes]
+        with _reranker_lock:
+            reranker_scores = self._model.predict(pairs)
+
+        # Normalise reranker logits to [0, 1]
+        lo, hi = min(reranker_scores), max(reranker_scores)
+        span = hi - lo if hi > lo else 1.0
+        norm_scores = [(s - lo) / span for s in reranker_scores]
+
+        for node, norm_score in zip(nodes, norm_scores):
+            retrieval_score = node.score or 0.0
+            node.score = self._alpha * retrieval_score + (1 - self._alpha) * norm_score
+
+        return sorted(nodes, key=lambda n: n.score or 0.0, reverse=True)[: self._top_n]
+
+
+class ArticleTitleBoostPostprocessor(BaseNodePostprocessor):
+    """Post-rerank score boost based on article title / query token overlap.
+
+    Runs *after* the cross-encoder reranker (which already scored all nodes).
+    Applies a small additive bonus proportional to how many title tokens appear
+    in the query, then re-sorts and truncates to top_n.
+
+    This rescues open-ended queries ("What is TREA?", "pledged government bonds")
+    where embedding similarity alone can't bridge the vocabulary gap but the
+    article title ("Total Risk Exposure Amount") is a strong discriminative signal.
+    """
+
+    _STOPWORDS: frozenset = frozenset({
+        "requirements", "requirement", "article", "articles", "institution",
+        "institutions", "regulation", "regulations", "general", "specific",
+        "provisions", "provision", "the", "of", "for", "and", "or", "in",
+        "to", "a", "an", "on", "by", "with", "that", "this", "is", "are",
+        "be", "been", "have", "has", "not", "which", "from", "at", "as",
+        "its", "their", "it", "shall", "may", "must",
+    })
+
+    def __init__(self, boost_weight: float, top_n: int) -> None:
+        super().__init__()
+        self._boost_weight = boost_weight
+        self._top_n = top_n
+
+    @classmethod
+    def class_name(cls) -> str:
+        return "ArticleTitleBoostPostprocessor"
+
+    def _tokenize(self, text: str) -> set[str]:
+        tokens = set(re.findall(r"[a-z0-9]+", text.lower()))
+        return tokens - self._STOPWORDS
+
+    def _postprocess_nodes(
+        self,
+        nodes: list[NodeWithScore],
+        query_bundle: QueryBundle | None = None,
+    ) -> list[NodeWithScore]:
+        if not nodes or query_bundle is None or self._boost_weight == 0:
+            return nodes[: self._top_n]
+
+        query_tokens = self._tokenize(query_bundle.query_str)
+        if not query_tokens:
+            return nodes[: self._top_n]
+
+        for node in nodes:
+            title = node.node.metadata.get("article_title", "") or ""
+            if not title:
+                continue
+            title_tokens = self._tokenize(title)
+            if not title_tokens:
+                continue
+            matched = query_tokens & title_tokens
+            if not matched:
+                continue
+            # min() denominator: titles are short (2-5 words), so 2/3 title words = 0.67
+            # instead of diluting against a 15-token query (Jaccard would give ~0.13)
+            match_ratio = len(matched) / min(len(query_tokens), len(title_tokens))
+            boost = self._boost_weight * match_ratio
+            node.score = (node.score or 0.0) + boost
+
+        return sorted(nodes, key=lambda n: n.score or 0.0, reverse=True)[: self._top_n]
+
+
+class AdjacentArticleTiebreakerPostprocessor(BaseNodePostprocessor):
+    """Post-rerank tiebreaker for adjacent-article rank-flip failures.
+
+    When the top-2 nodes are "adjacent" articles (same numeric base, e.g. 429/429a,
+    or consecutive integers, e.g. 114/115) and their score gap is below `delta`,
+    prefer the article whose title has more query-token overlap.
+
+    Fires only on near-ties between neighbours — safe to leave enabled in production
+    since it is a no-op for all other cases.
+
+    Enabled by setting ADJACENT_TIEBREAK_DELTA > 0 (e.g. 0.05).
+    """
+
+    _STOPWORDS: frozenset = frozenset({
+        "requirements", "requirement", "article", "articles", "institution",
+        "institutions", "regulation", "regulations", "general", "specific",
+        "provisions", "provision", "the", "of", "for", "and", "or", "in",
+        "to", "a", "an", "on", "by", "with", "that", "this", "is", "are",
+        "be", "been", "have", "has", "not", "which", "from", "at", "as",
+        "its", "their", "it", "shall", "may", "must",
+    })
+
+    def __init__(self, delta: float) -> None:
+        super().__init__()
+        self._delta = delta
+
+    @classmethod
+    def class_name(cls) -> str:
+        return "AdjacentArticleTiebreakerPostprocessor"
+
+    @staticmethod
+    def _article_base(article_str: str) -> int:
+        """Extract the leading integer from an article string (e.g. '429a' → 429)."""
+        m = re.match(r"(\d+)", article_str.strip())
+        return int(m.group(1)) if m else -1
+
+    def _are_adjacent(self, art_a: str, art_b: str) -> bool:
+        """True if articles share the same numeric base or are consecutive integers."""
+        if not art_a or not art_b:
+            return False
+        base_a = self._article_base(art_a)
+        base_b = self._article_base(art_b)
+        if base_a < 0 or base_b < 0:
+            return False
+        # Same base (e.g. 429 and 429a) or consecutive (e.g. 114 and 115)
+        return base_a == base_b or abs(base_a - base_b) == 1
+
+    def _title_overlap(self, title: str, query_tokens: set[str]) -> int:
+        tokens = set(re.findall(r"[a-z0-9]+", title.lower())) - self._STOPWORDS
+        return len(tokens & query_tokens)
+
+    def _postprocess_nodes(
+        self,
+        nodes: list[NodeWithScore],
+        query_bundle: QueryBundle | None = None,
+    ) -> list[NodeWithScore]:
+        if len(nodes) < 2 or query_bundle is None or self._delta <= 0:
+            return nodes
+
+        top, second = nodes[0], nodes[1]
+        score_gap = (top.score or 0.0) - (second.score or 0.0)
+        if score_gap > self._delta:
+            return nodes
+
+        art_top = top.node.metadata.get("article", "")
+        art_second = second.node.metadata.get("article", "")
+        if not self._are_adjacent(art_top, art_second):
+            return nodes
+
+        query_tokens = set(re.findall(r"[a-z0-9]+", query_bundle.query_str.lower())) - self._STOPWORDS
+        title_top = top.node.metadata.get("article_title", "") or ""
+        title_second = second.node.metadata.get("article_title", "") or ""
+        overlap_top = self._title_overlap(title_top, query_tokens)
+        overlap_second = self._title_overlap(title_second, query_tokens)
+
+        if overlap_second > overlap_top:
+            logger.debug(
+                "AdjacentTiebreaker: swapped Art.%s (overlap=%d) above Art.%s (overlap=%d), gap=%.4f",
+                art_second, overlap_second, art_top, overlap_top, score_gap,
+            )
+            nodes[0], nodes[1] = nodes[1], nodes[0]
+
+        return nodes
+
+
+class ParagraphWindowReranker(BaseNodePostprocessor):
+    """Paragraph-aware cross-encoder reranker.
+
+    Instead of scoring the full article text against the query, splits each
+    article into paragraph windows and uses the *best window score* as the
+    article's rerank score.  This prevents long articles from diluting the
+    relevant paragraph's signal in the cross-encoder cross-attention.
+
+    Enabled by USE_PARAGRAPH_WINDOW_RERANKER=true.
+    """
+
+    _MIN_WINDOW_CHARS: int = 30
+
+    def __init__(self, model: str, top_n: int, alpha: float, max_windows: int) -> None:
+        super().__init__()
+        from sentence_transformers import CrossEncoder
+        self._model = CrossEncoder(model)
+        self._top_n = top_n
+        self._alpha = alpha
+        self._max_windows = max_windows
+
+    @classmethod
+    def class_name(cls) -> str:
+        return "ParagraphWindowReranker"
+
+    def _split_windows(self, text: str) -> list[str]:
+        """Split article text into paragraph windows, evenly sampled up to max_windows."""
+        raw = re.split(r"\n\n+", text)
+        windows = [w.strip() for w in raw if len(w.strip()) >= self._MIN_WINDOW_CHARS]
+        if not windows:
+            return [text]
+        if len(windows) <= self._max_windows:
+            return windows
+        # Evenly sample across the article so we cover early, middle, and late provisions
+        step = len(windows) / self._max_windows
+        return [windows[int(i * step)] for i in range(self._max_windows)]
+
+    def _postprocess_nodes(
+        self,
+        nodes: list[NodeWithScore],
+        query_bundle: QueryBundle | None = None,
+    ) -> list[NodeWithScore]:
+        if not nodes or query_bundle is None:
+            return nodes
+
+        query = query_bundle.query_str
+        node_windows = [self._split_windows(n.node.get_content()) for n in nodes]
+        all_pairs = [(query, w) for windows in node_windows for w in windows]
+
+        with _reranker_lock:
+            all_scores = list(self._model.predict(all_pairs))
+
+        lo, hi = min(all_scores), max(all_scores)
+        span = hi - lo if hi > lo else 1.0
+
+        idx = 0
+        for node, windows in zip(nodes, node_windows):
+            count = len(windows)
+            window_scores = all_scores[idx: idx + count]
+            idx += count
+            best_idx = max(range(count), key=lambda i: window_scores[i])
+            best_raw = window_scores[best_idx]
+            best_norm = (best_raw - lo) / span
+            retrieval_score = node.score or 0.0
+            node.score = self._alpha * retrieval_score + (1 - self._alpha) * best_norm
+            # Store the best-matching window in metadata for debugging / future display use
+            node.node.metadata["best_paragraph"] = windows[best_idx]
+
+        return sorted(nodes, key=lambda n: n.score or 0.0, reverse=True)[: self._top_n]
+
 
 _LEGAL_QA_TEMPLATE = PromptTemplate(
     "You are a regulatory compliance expert specialising in EU prudential banking regulation "
     "(CRR – Regulation (EU) No 575/2013).\n\n"
     "Use ONLY the context below to answer the question. "
-    "Do not speculate or introduce information not present in the context. "
-    "If the context does not contain enough information to answer, respond with ONLY the "
-    "following sentence: 'The provided context does not contain sufficient information to "
-    "answer this question.'\n\n"
+    "Do not speculate or introduce information not present in the context.\n"
+    "CRITICAL CITATION RULE: Cite ONLY article numbers whose text appears verbatim in the "
+    "context provided below. If the question asks about a specific article but that article "
+    "is not present in the context, state: 'Article X was not found in the provided context.'\n"
+    "If the context does not contain enough information to answer, respond with ONLY: "
+    "'The provided context does not contain sufficient information to answer this question.'\n\n"
     "---------------------\n"
     "{context_str}\n"
     "---------------------\n\n"
@@ -63,11 +358,13 @@ _LEGAL_QA_TEMPLATE = PromptTemplate(
     "A concise answer to the question in 1–3 sentences.\n\n"
     "**Key Provisions**\n"
     "Bullet-point summary of the relevant rules, thresholds, or definitions drawn from the context. "
-    "Each bullet must reference the Article it comes from (e.g. '- Article 92(1)(a): …').\n\n"
+    "Each bullet must reference the Article it comes from (e.g. '- Article 92(1)(a): …'). "
+    "Only cite articles whose text appears in the context above.\n\n"
     "**Conditions, Exceptions & Definitions**\n"
     "Any qualifications, carve-outs, special treatments, or defined terms that affect the answer.\n\n"
     "**Article References**\n"
-    "Comma-separated list of every Article cited above (e.g. 'Article 92, Article 93, Article 128').\n\n"
+    "Comma-separated list of every Article cited above. "
+    "Only include articles present in the context (e.g. 'Article 92, Article 93, Article 128').\n\n"
     "Answer:"
 )
 
@@ -76,10 +373,12 @@ _LEGAL_QA_TEMPLATE_WITH_HISTORY = PromptTemplate(
     "You are a regulatory compliance expert specialising in EU prudential banking regulation "
     "(CRR – Regulation (EU) No 575/2013).\n\n"
     "Use ONLY the context below to answer the question. "
-    "Do not speculate or introduce information not present in the context. "
-    "If the context does not contain enough information to answer, respond with ONLY the "
-    "following sentence: 'The provided context does not contain sufficient information to "
-    "answer this question.'\n\n"
+    "Do not speculate or introduce information not present in the context.\n"
+    "CRITICAL CITATION RULE: Cite ONLY article numbers whose text appears verbatim in the "
+    "context provided below. If the question asks about a specific article but that article "
+    "is not present in the context, state: 'Article X was not found in the provided context.'\n"
+    "If the context does not contain enough information to answer, respond with ONLY: "
+    "'The provided context does not contain sufficient information to answer this question.'\n\n"
     "Prior conversation:\n{history_str}\n\n"
     "---------------------\n"
     "{context_str}\n"
@@ -90,11 +389,13 @@ _LEGAL_QA_TEMPLATE_WITH_HISTORY = PromptTemplate(
     "A concise answer to the question in 1–3 sentences.\n\n"
     "**Key Provisions**\n"
     "Bullet-point summary of the relevant rules, thresholds, or definitions drawn from the context. "
-    "Each bullet must reference the Article it comes from (e.g. '- Article 92(1)(a): …').\n\n"
+    "Each bullet must reference the Article it comes from (e.g. '- Article 92(1)(a): …'). "
+    "Only cite articles whose text appears in the context above.\n\n"
     "**Conditions, Exceptions & Definitions**\n"
     "Any qualifications, carve-outs, special treatments, or defined terms that affect the answer.\n\n"
     "**Article References**\n"
-    "Comma-separated list of every Article cited above (e.g. 'Article 92, Article 93, Article 128').\n\n"
+    "Comma-separated list of every Article cited above. "
+    "Only include articles present in the context (e.g. 'Article 92, Article 93, Article 128').\n\n"
     "Answer:"
 )
 
@@ -152,6 +453,7 @@ def _rewrite_query_with_history(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             timeout=30.0,
+            **_EVAL_KWARGS,
         )
         rewritten = (response.choices[0].message.content or "").strip()
         return rewritten if rewritten else query
@@ -180,8 +482,49 @@ _ABBREV_MAP: dict[str, str] = {
     "CCP": "Central Counterparty",
     "QCCP": "Qualifying Central Counterparty",
     "EBA": "European Banking Authority",
+    "STS": "Simple Transparent and Standardised securitisation",
+    "SEC-IRBA": "Securitisation Internal Ratings-Based Approach",
+    "SEC-SA": "Securitisation Standardised Approach",
+    "SA": "Standardised Approach",
+    "CIU": "Collective Investment Undertaking",
+    "NPE": "Non-Performing Exposure",
+    "TREA": "Total Risk Exposure Amount",
+    "HQLA": "High Quality Liquid Asset",
+    "PD": "Probability of Default",
+    "CF": "Conversion Factor",
+    "SME": "Small and Medium-sized Enterprise",
+    "IPRE": "Income-Producing Real Estate",
+    "HVCRE": "High-Volatility Commercial Real Estate",
 }
 _ABBREV_RE = re.compile(r"\b(" + "|".join(re.escape(k) for k in _ABBREV_MAP) + r")\b")
+
+# Legal paraphrase → canonical CRR term expansion.
+# Appends the canonical term inline so both BM25 and dense retrieval get better signals
+# when users describe concepts with common synonyms not in the CRR text.
+_SYNONYM_MAP: dict[str, str] = {
+    "preference shares": "Additional Tier 1 instruments",
+    "perpetual bonds": "Additional Tier 1 instruments",
+    "subordinated notes": "Tier 2 instruments",
+    "subordinated debt": "Tier 2 instruments",
+    "bail-in bonds": "eligible liabilities",
+    "minority interests": "minority interest capital instruments",
+    "non-performing loans": "Non-Performing Exposures",
+    "non-performing loan": "Non-Performing Exposure",
+    "securitisation position": "securitisation exposure",
+    "enterprises": "corporates",
+    "enterprise": "corporate",
+    # run_10 additions — surgical CRR-specific mappings only (broad terms removed after regression)
+    "local authority": "regional government or local authority",
+    "local public authority": "regional government or local authority",
+    "local authorities": "regional governments or local authorities",
+    "pledged assets": "encumbered assets",
+    "pledged collateral": "encumbered assets",
+    "core capital": "Common Equity Tier 1",
+}
+_SYNONYM_RE = re.compile(
+    r"\b(" + "|".join(re.escape(k) for k in _SYNONYM_MAP) + r")\b",
+    re.IGNORECASE,
+)
 
 # Normalise shorthand article references to the canonical "Article N" form used in metadata.
 # Handles: "art. 92", "Art 92", "article92", "§92" → "Article 92"
@@ -262,11 +605,20 @@ def _truncate_context(context_str: str, max_chars: int = MAX_CONTEXT_CHARS) -> s
     return window
 
 
+def _expand_synonyms(query: str) -> str:
+    """Expand legal paraphrases to canonical CRR terms for improved retrieval recall."""
+    return _SYNONYM_RE.sub(
+        lambda m: f"{m.group(0)} ({_SYNONYM_MAP[m.group(0).lower()]})",
+        query,
+    )
+
+
 def _normalise_query(query: str) -> str:
-    """Expand CRR abbreviations, canonicalise article shorthand references, and expand ranges."""
+    """Expand CRR abbreviations, synonyms, canonicalise article references, and expand ranges."""
     query = _ABBREV_RE.sub(lambda m: f"{m.group(1)} ({_ABBREV_MAP[m.group(1)]})", query)
     query = _ART_RE.sub(lambda m: f"Article {m.group(1)}", query)
     query = _expand_article_ranges(query)
+    query = _expand_synonyms(query)
     return query
 
 
@@ -338,11 +690,225 @@ def _detect_direct_article_lookup(query: str) -> Optional[str]:
     return unique.pop() if len(unique) == 1 else None
 
 
+def _enrich_open_ended_query(
+    query: str,
+    api_key: Optional[str],
+    model: str = "gpt-4o-mini",
+) -> str:
+    """Predict relevant CRR article numbers for open-ended queries and append as search hints.
+
+    Called for CRR_SPECIFIC queries with no explicit article reference to improve
+    retrieval recall for semantically weak queries. Adds ~1-2s latency.
+
+    Returns:
+        Query enriched with article number hints, or original query on failure.
+    """
+    prompt = (
+        "You are a CRR (EU Capital Requirements Regulation, No 575/2013) expert.\n"
+        "Given the question below, list the 2-3 CRR article numbers most likely to "
+        "contain the answer. Respond with ONLY the article numbers, comma-separated "
+        "(e.g. '92, 93, 128'). Do not include any explanation.\n\n"
+        f"Question: {query}"
+    )
+    try:
+        client = openai.OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            timeout=15.0,
+            max_tokens=30,
+        )
+        hints = (response.choices[0].message.content or "").strip()
+        # Validate: hints must look like article numbers (digits, letters, commas, spaces)
+        if hints and re.match(r'^[\d\w,\s]+$', hints):
+            logger.info("Article hint enrichment: '%s...' → hints: %s", query[:60], hints)
+            return f"{query} [Relevant CRR articles: {hints}]"
+    except Exception as exc:
+        logger.warning("Article hint enrichment failed (%s) — using original query", exc)
+    return query
+
+
+def _generate_hyde_query(
+    query: str,
+    api_key: Optional[str],
+    model: str = "gpt-4o-mini",
+) -> str:
+    """Combined HyDE + article-hint query for open-ended CRR retrieval.
+
+    Single LLM call that returns:
+    - A hypothetical CRR-style passage (bridges vocabulary gap for dense/BGE-M3)
+    - Predicted article numbers (concrete BM25/sparse anchor tokens)
+
+    Combined into: "{hypothesis} [Relevant CRR articles: {hints}]"
+
+    Dense retrieval benefits from CRR legal vocabulary in the hypothesis.
+    BM25/sparse benefits from explicit article number tokens even when the
+    hypothesis misleads the dense vector (diluted-embedding failure mode).
+
+    Returns:
+        Combined hypothesis + article hints string, or original query on failure.
+    """
+    prompt = (
+        "You are a CRR (EU Capital Requirements Regulation, No 575/2013) expert.\n"
+        "Given the question below, respond in EXACTLY this format with no other text:\n\n"
+        "PASSAGE: <3-4 sentences in formal CRR legislative style that would answer "
+        "the question, using precise legal terminology. Write as the regulation text "
+        "itself — do not say 'According to CRR'.>\n"
+        "ARTICLES: <2-3 CRR article numbers most likely to contain the answer, "
+        "comma-separated, e.g. 92, 93>\n\n"
+        f"Question: {query}"
+    )
+    try:
+        client = openai.OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            timeout=15.0,
+            max_tokens=220,
+            **_EVAL_KWARGS,
+        )
+        raw = (response.choices[0].message.content or "").strip()
+
+        # Parse PASSAGE and ARTICLES from structured response.
+        # Accumulate continuation lines after PASSAGE: until ARTICLES: or end of input,
+        # so multi-line passages are not silently truncated.
+        passage_lines: list[str] = []
+        hints = ""
+        in_passage = False
+        for line in raw.splitlines():
+            if line.startswith("PASSAGE:"):
+                passage_lines = [line[len("PASSAGE:"):].strip()]
+                in_passage = True
+            elif line.startswith("ARTICLES:"):
+                hints = line[len("ARTICLES:"):].strip()
+                in_passage = False
+            elif in_passage:
+                passage_lines.append(line.strip())
+        passage = " ".join(passage_lines)
+
+        # Validate hints look like article numbers (digits, letters, commas, spaces)
+        if hints and not re.match(r'^[\d\w,\s]+$', hints):
+            hints = ""
+
+        if passage:
+            retrieve_query = passage
+            if hints:
+                retrieve_query = f"{passage} [Relevant CRR articles: {hints}]"
+            logger.info(
+                "HyDE+hints for '%s...': passage='%s...' articles=%s",
+                query[:50], passage[:60], hints or "none",
+            )
+            return retrieve_query
+    except Exception as exc:
+        logger.warning("HyDE generation failed (%s) — using original query", exc)
+    return query
+
+
+def _generate_sub_queries(
+    query: str,
+    api_key: Optional[str],
+    model: str = "gpt-4o-mini",
+) -> list[str]:
+    """Break a complex multi-hop question into 2-3 simpler sub-queries.
+
+    Used for questions spanning multiple articles or requiring comparison of
+    different regulatory concepts. Each sub-query targets a single aspect.
+
+    Returns:
+        List of up to 3 sub-queries, or empty list on failure.
+    """
+    prompt = (
+        "You are a CRR (EU Capital Requirements Regulation) expert.\n"
+        "Break the following complex question into 2-3 simpler sub-questions that can "
+        "each be answered from individual CRR articles. Return ONLY the sub-questions, "
+        "one per line, with no numbering or bullets.\n\n"
+        f"Question: {query}"
+    )
+    try:
+        client = openai.OpenAI(api_key=api_key)
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            timeout=15.0,
+            max_tokens=200,
+            **_EVAL_KWARGS,
+        )
+        lines = (resp.choices[0].message.content or "").strip().split('\n')
+        sub_queries = [q.strip().lstrip('0123456789.-) ') for q in lines if q.strip()]
+        logger.info("Generated %d sub-queries for '%s...'", len(sub_queries), query[:60])
+        return sub_queries[:3]
+    except Exception as exc:
+        logger.warning("Sub-query generation failed (%s)", exc)
+        return []
+
+
 @dataclass
 class QueryResult:
     answer: str
     sources: list[dict]
     trace_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+
+
+def merge_rrf(
+    vector_nodes: list[NodeWithScore],
+    toc_nodes: list[NodeWithScore],
+    k: int = 60,
+    cap: int = RERANK_TOP_N,
+) -> list[NodeWithScore]:
+    """Merge two ranked node lists using Reciprocal Rank Fusion.
+
+    Combines vector retrieval results with ToC-routed retrieval results.
+    Each node receives a score = sum(1 / (k + rank + 1)) across both lists,
+    where rank is 0-based. Nodes appearing in both lists get a cumulative boost.
+
+    Scores are normalised to [0, 1] after fusion so that downstream confidence
+    thresholds (e.g. _LOW_CONFIDENCE_THRESHOLD) remain meaningful.
+
+    Args:
+        vector_nodes: Nodes from the primary hybrid vector retrieval (may be
+                      reranked). Order reflects relevance.
+        toc_nodes:    Nodes fetched for articles predicted by ToC LLM routing.
+        k:            RRF smoothing constant (default 60, standard value).
+        cap:          Maximum number of nodes to return.
+
+    Returns:
+        Merged, deduplicated list of NodeWithScore, capped at `cap`, with
+        normalised RRF scores assigned to each node's `.score` attribute.
+    """
+    scores: dict[str, float] = {}
+    node_map: dict[str, NodeWithScore] = {}
+
+    for rank, node in enumerate(vector_nodes):
+        nid = node.node.node_id
+        scores[nid] = scores.get(nid, 0.0) + 1.0 / (k + rank + 1)
+        # Keep node with highest original score for content access
+        if nid not in node_map or (node.score or 0.0) > (node_map[nid].score or 0.0):
+            node_map[nid] = node
+
+    for rank, node in enumerate(toc_nodes):
+        nid = node.node.node_id
+        scores[nid] = scores.get(nid, 0.0) + 1.0 / (k + rank + 1)
+        if nid not in node_map or (node.score or 0.0) > (node_map[nid].score or 0.0):
+            node_map[nid] = node
+
+    if not scores:
+        return []
+
+    # Normalise to [0, 1]
+    max_score = max(scores.values())
+    if max_score > 0:
+        scores = {nid: s / max_score for nid, s in scores.items()}
+
+    # Sort by RRF score descending, assign normalised score, cap
+    sorted_ids = sorted(scores, key=lambda nid: scores[nid], reverse=True)[:cap]
+    merged: list[NodeWithScore] = []
+    for nid in sorted_ids:
+        node = node_map[nid]
+        node.score = scores[nid]
+        merged.append(node)
+
+    return merged
 
 
 class QueryEngine:
@@ -372,34 +938,95 @@ class QueryEngine:
         self._engine_cache: dict[str, RetrieverQueryEngine] = {}
         self._engine_cache_lock = threading.Lock()
         self._reranker = None
+        self._para_reranker = None
+        self._title_booster = None
+        self._tiebreaker = None
         self._defs: Optional[object] = None  # DefinitionsStore, imported lazily
+        self._toc: Optional[object] = None   # TocStore, imported lazily
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     def load(self) -> None:
-        """Build the retriever chain from the persisted index."""
-        self._vector_index = self.indexer.load()  # may set Settings.llm = None as side effect
-        self._configure_settings()                 # restore OpenAI LLM after indexer resets it
+        """Build the retriever chain from the persisted index.
+
+        All new objects are built into local variables before being swapped in under
+        _engine_cache_lock, so concurrent retrieve() calls always see a consistent
+        snapshot — never a partially-refreshed state.
+        """
+        # --- Build phase (no mutations to live fields) ---
+        new_vector_index = self.indexer.load()  # may set Settings.llm = None as side effect
+        self._configure_settings()              # restore OpenAI LLM after indexer resets it
+
+        new_reranker = None
         if self.use_reranker:
-            from llama_index.postprocessor.flag_embedding_reranker import FlagEmbeddingReranker
-            self._reranker = FlagEmbeddingReranker(top_n=RERANK_TOP_N, model=RERANKER_MODEL)
+            from llama_index.core.postprocessor import SentenceTransformerRerank
+            new_reranker = SentenceTransformerRerank(top_n=RERANK_TOP_N, model=RERANKER_MODEL)
             logger.info("Reranker loaded: %s (top_n=%d)", RERANKER_MODEL, RERANK_TOP_N)
-        self._engine = self._build_engine(self._vector_index)
-        with self._engine_cache_lock:
-            self._engine_cache = {}
+
+        new_title_booster = None
+        if TITLE_BOOST_WEIGHT > 0:
+            new_title_booster = ArticleTitleBoostPostprocessor(
+                boost_weight=TITLE_BOOST_WEIGHT, top_n=RERANK_TOP_N
+            )
+            logger.info("ArticleTitleBoostPostprocessor enabled (weight=%.2f)", TITLE_BOOST_WEIGHT)
+
+        new_tiebreaker = None
+        if ADJACENT_TIEBREAK_DELTA > 0:
+            new_tiebreaker = AdjacentArticleTiebreakerPostprocessor(delta=ADJACENT_TIEBREAK_DELTA)
+            logger.info("AdjacentArticleTiebreakerPostprocessor enabled (delta=%.3f)", ADJACENT_TIEBREAK_DELTA)
+
+        new_para_reranker = None
+        if os.getenv("USE_PARAGRAPH_WINDOW_RERANKER", "false").lower() == "true":
+            new_para_reranker = ParagraphWindowReranker(
+                model=RERANKER_MODEL,
+                top_n=RERANK_TOP_N,
+                alpha=RERANK_BLEND_ALPHA,
+                max_windows=PARAGRAPH_WINDOW_MAX_WINDOWS,
+            )
+            logger.info(
+                "ParagraphWindowReranker enabled (model=%s, top_n=%d, max_windows=%d)",
+                RERANKER_MODEL, RERANK_TOP_N, PARAGRAPH_WINDOW_MAX_WINDOWS,
+            )
+
+        new_engine = self._build_engine(new_vector_index)
 
         # Load Article 4 definitions fast-path store
         from src.query.definitions_store import DefinitionsStore
-        self._defs = DefinitionsStore(self.vector_store)
+        new_defs = DefinitionsStore(self.vector_store)
         for lang in ("en", "it"):
             try:
-                self._defs.load(lang)
+                new_defs.load(lang)
             except Exception as exc:
                 logger.warning(
                     "DefinitionsStore load failed for language=%s: %s", lang, exc
                 )
+
+        # Load ToC store for LLM-guided routing (opt-in via USE_TOC_ROUTING=true)
+        new_toc = None
+        if os.getenv("USE_TOC_ROUTING", "false").lower() == "true":
+            from src.query.toc_store import TocStore
+            new_toc = TocStore(self.vector_store)
+            for lang in ("en", "it"):
+                try:
+                    new_toc.load(lang)
+                except Exception as exc:
+                    logger.warning(
+                        "TocStore load failed for language=%s: %s", lang, exc
+                    )
+
+        # --- Atomic swap phase (brief lock hold — reference assignments only) ---
+        with self._engine_cache_lock:
+            self._vector_index = new_vector_index
+            self._engine = new_engine
+            self._engine_cache = {}
+            self._reranker = new_reranker
+            self._para_reranker = new_para_reranker
+            self._title_booster = new_title_booster
+            self._tiebreaker = new_tiebreaker
+            self._defs = new_defs
+            self._toc = new_toc
 
         logger.info("QueryEngine ready.")
 
@@ -421,7 +1048,14 @@ class QueryEngine:
         Returns:
             (all_nodes_for_synthesis, sources, trace_id, normalised_query, engine)
         """
-        if self._engine is None:
+        # Snapshot the engine references atomically so this call sees a consistent
+        # view even if load() is running concurrently in a background ingestion thread.
+        with self._engine_cache_lock:
+            engine_snap = self._engine
+            vector_index_snap = self._vector_index
+            cache_snap = self._engine_cache
+
+        if engine_snap is None:
             raise RuntimeError("Call load() before querying.")
 
         trace_id = str(uuid.uuid4())
@@ -436,15 +1070,18 @@ class QueryEngine:
 
         # Use a cached language-filtered engine — double-checked locking for thread safety
         if language:
-            if language not in self._engine_cache:
+            if language not in cache_snap:
                 with self._engine_cache_lock:
-                    if language not in self._engine_cache:
-                        self._engine_cache[language] = self._build_engine(
-                            self._vector_index, language_filter=language
+                    # Re-read cache after acquiring lock; it may have been swapped by load().
+                    cache_snap = self._engine_cache
+                    vector_index_snap = self._vector_index
+                    if language not in cache_snap:
+                        cache_snap[language] = self._build_engine(
+                            vector_index_snap, language_filter=language
                         )
-            engine = self._engine_cache[language]
+            engine = cache_snap[language]
         else:
-            engine = self._engine
+            engine = engine_snap
 
         query_bundle = QueryBundle(query_str=user_query)
 
@@ -465,7 +1102,13 @@ class QueryEngine:
         # Cross-lingual fallback: if language filter produced no results, retry without filter
         if language and not source_nodes:
             logger.info("[%s] No results for language=%s — retrying without language filter", trace_id, language)
-            source_nodes = self._engine.retrieve(query_bundle)
+            source_nodes = engine_snap.retrieve(query_bundle)
+            # Post-filter: keep only nodes matching the target language.
+            # The fallback may return mixed-language results.
+            source_nodes = [
+                n for n in source_nodes
+                if n.node.metadata.get("language") == language
+            ]
 
         # Stage 2: Cross-reference expansion
         expansions = max_cross_ref_expansions if max_cross_ref_expansions is not None \
@@ -477,12 +1120,29 @@ class QueryEngine:
         # Deduplicate expanded nodes against primary results
         source_ids = {node.node.node_id for node in source_nodes}
         deduped_expanded = [n for n in expanded_nodes if n.node.node_id not in source_ids]
+
+        # Score expanded nodes with the reranker so they enter context in evidence order,
+        # not arbitrary fetch order. Skip if no reranker is loaded.
+        active_reranker = getattr(self, "_para_reranker", None) or getattr(self, "_reranker", None)
+        if deduped_expanded and active_reranker is not None:
+            try:
+                scored_expanded = active_reranker.postprocess_nodes(
+                    deduped_expanded, query_bundle=QueryBundle(query_str=user_query)
+                )
+                # postprocess_nodes truncates to top_n — restore all by merging back any
+                # that were dropped (they still belong in context, just lower priority)
+                scored_ids = {n.node.node_id for n in scored_expanded}
+                unscored = [n for n in deduped_expanded if n.node.node_id not in scored_ids]
+                deduped_expanded = scored_expanded + unscored
+            except Exception as exc:
+                logger.warning("Reranking of expanded nodes failed: %s", exc)
+
         all_nodes_for_synthesis = source_nodes + deduped_expanded
 
         sources = [
             {
                 "text": node.node.get_content()[:500],
-                "score": round(node.score or 0.0, 4),
+                "score": float(round(node.score or 0.0, 4)),
                 "metadata": node.node.metadata,
                 "expanded": False,
             }
@@ -530,12 +1190,6 @@ class QueryEngine:
                 logger.info("Query rewritten: '%s' → '%s'", user_query, effective_query)
         else:
             effective_query = user_query
-
-        # Stage 0.5: Article 4 / definition fast-path — bypass RAG entirely
-        if not history:
-            def_result = self.lookup_definition(effective_query, language)
-            if def_result is not None:
-                return def_result
 
         all_nodes_for_synthesis, sources, trace_id, normalised_query, _engine = self.retrieve(
             effective_query, language, max_cross_ref_expansions
@@ -643,6 +1297,7 @@ class QueryEngine:
         depth: int = 1,
         _seen: Optional[set] = None,
         _seen_annexes: Optional[set] = None,
+        source_limit: int = 2,
     ) -> list:
         """Fetch articles and annexes referenced by retrieved nodes that aren't already in the result set.
 
@@ -650,6 +1305,9 @@ class QueryEngine:
             depth: How many hops to follow (1 = single-pass, 2 = also expand refs of refs).
             _seen: Internal set of already-retrieved article numbers (used for recursion).
             _seen_annexes: Internal set of already-retrieved annex IDs (used for recursion).
+            source_limit: Only collect cross-refs from the top-N primary nodes (default 2).
+                Expanding from all nodes can inject low-relevance refs from weakly-scored
+                articles; restricting to the strongest evidence keeps expansions targeted.
         """
         if limit <= 0 or depth <= 0:
             return []
@@ -667,9 +1325,11 @@ class QueryEngine:
             if langs:
                 language = Counter(langs).most_common(1)[0][0]
 
-        # Collect referenced articles from all source node metadata
+        # Collect referenced articles from the top source_limit primary nodes only.
+        # Using all nodes can surface refs from weakly-relevant articles; the strongest
+        # results carry the most trustworthy cross-reference signal.
         refs_to_fetch: set[str] = set()
-        for node in source_nodes:
+        for node in source_nodes[:source_limit]:
             csv = node.node.metadata.get("referenced_articles", "")
             if csv:
                 for ref in csv.split(","):
@@ -691,18 +1351,10 @@ class QueryEngine:
                 )
                 continue
             try:
-                filters_list = [
-                    MetadataFilter(key="article", value=ref_art, operator=FilterOperator.EQ),
-                ]
+                conditions = [("article", ref_art)]
                 if language:
-                    filters_list.append(
-                        MetadataFilter(key="language", value=language, operator=FilterOperator.EQ)
-                    )
-                results = self._retrieve_with_filters(
-                    filters=MetadataFilters(filters=filters_list),
-                    query_str=f"Article {ref_art}",
-                    top_k=1,
-                )
+                    conditions.append(("language", language))
+                results = self._fetch_nodes_direct(conditions, top_k=1)
                 expanded.extend(results)
                 _seen.add(ref_art)
             except Exception as exc:
@@ -722,7 +1374,7 @@ class QueryEngine:
                 if node.node.metadata.get("annex_id")
             }
         annex_refs_to_fetch: set[str] = set()
-        for node in source_nodes:
+        for node in source_nodes[:source_limit]:
             csv = node.node.metadata.get("referenced_annexes", "")
             for ref in csv.split(","):
                 ref = ref.strip().upper()
@@ -732,19 +1384,10 @@ class QueryEngine:
             if len(expanded) >= limit:
                 break
             try:
-                filters_list = [
-                    MetadataFilter(key="level", value="ANNEX", operator=FilterOperator.EQ),
-                    MetadataFilter(key="annex_id", value=ref_anx, operator=FilterOperator.EQ),
-                ]
+                conditions = [("level", "ANNEX"), ("annex_id", ref_anx)]
                 if language:
-                    filters_list.append(
-                        MetadataFilter(key="language", value=language, operator=FilterOperator.EQ)
-                    )
-                results = self._retrieve_with_filters(
-                    filters=MetadataFilters(filters=filters_list),
-                    query_str=f"Annex {ref_anx}",
-                    top_k=1,
-                )
+                    conditions.append(("language", language))
+                results = self._fetch_nodes_direct(conditions, top_k=1)
                 expanded.extend(results)
                 _seen_annexes.add(ref_anx)
             except Exception as exc:
@@ -889,23 +1532,117 @@ class QueryEngine:
     def _direct_article_retrieve(
         self, article_num: str, query_str: str, language: Optional[str]
     ) -> list:
-        """Metadata-filtered retrieval for a specific article number, bypassing vector ranking."""
-        filters_list = [
-            MetadataFilter(key="article", value=article_num, operator=FilterOperator.EQ),
-        ]
+        """Direct Qdrant scroll for a specific article — no embedding required.
+
+        Uses _fetch_nodes_direct so BGE-M3 encoding is skipped entirely, which
+        avoids _encode_lock contention and returns all chunks of the article
+        (not just the top-k by similarity score).
+        """
+        conditions: list[tuple[str, str]] = [("article", article_num)]
         if language:
-            filters_list.append(
-                MetadataFilter(key="language", value=language, operator=FilterOperator.EQ)
-            )
-        return self._retrieve_with_filters(
-            filters=MetadataFilters(filters=filters_list),
-            query_str=query_str,
-            top_k=10,
-        )
+            conditions.append(("language", language))
+        return self._fetch_nodes_direct(conditions, top_k=50)
+
+    # ------------------------------------------------------------------
+    # ToC routing support
+    # ------------------------------------------------------------------
+
+    @property
+    def toc_store(self):
+        """Return the TocStore instance, or None if not loaded."""
+        return self._toc
+
+    def toc_retrieve(
+        self,
+        article_numbers: list[str],
+        query_str: str,
+        language: Optional[str] = None,
+    ) -> list[NodeWithScore]:
+        """Fetch nodes for specific article numbers via metadata-filtered retrieval.
+
+        Used by the orchestrator after ToC routing predicts candidate articles.
+        Each article is retrieved independently (top_k=3 paragraphs) then merged
+        and deduplicated by node_id.
+        """
+        seen: set[str] = set()
+        results: list[NodeWithScore] = []
+
+        for article_num in article_numbers:
+            filter_conditions = [
+                MetadataFilter(
+                    key="article", value=article_num, operator=FilterOperator.EQ
+                )
+            ]
+            if language:
+                filter_conditions.append(
+                    MetadataFilter(
+                        key="language", value=language, operator=FilterOperator.EQ
+                    )
+                )
+            filters = MetadataFilters(filters=filter_conditions)
+            nodes = self._retrieve_with_filters(filters, query_str, top_k=3)
+            for node in nodes:
+                nid = node.node.node_id
+                if nid not in seen:
+                    seen.add(nid)
+                    results.append(node)
+
+        return results
 
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
+
+    def _fetch_nodes_direct(
+        self,
+        conditions: list[tuple[str, str]],
+        top_k: int = 1,
+    ) -> list[NodeWithScore]:
+        """Fetch nodes from Qdrant using only payload filters — no embedding required.
+
+        Used for cross-reference expansion where the article number is already known,
+        so semantic search adds no value and BGE-M3 encoding would just waste CPU time
+        and queue on the _encode_lock under parallel load.
+
+        Args:
+            conditions: list of (field_name, value) pairs combined with AND logic.
+            top_k: maximum number of results to return.
+        """
+        import json as _json
+        from qdrant_client.http.models import FieldCondition, Filter, MatchValue
+
+        client = self.vector_store._client
+        if client is None:
+            return []
+
+        must = [FieldCondition(key=k, match=MatchValue(value=v)) for k, v in conditions]
+        try:
+            records, _ = client.scroll(
+                collection_name=self.vector_store.collection_name,
+                scroll_filter=Filter(must=must),
+                with_payload=True,
+                with_vectors=False,
+                limit=top_k,
+            )
+        except Exception as exc:
+            logger.warning("_fetch_nodes_direct failed (conditions=%s): %s", conditions, exc)
+            return []
+
+        results: list[NodeWithScore] = []
+        for record in records:
+            payload = record.payload or {}
+            text = payload.get("text", "") or ""
+            if not text:
+                raw = payload.get("_node_content", "")
+                if raw:
+                    try:
+                        text = _json.loads(raw).get("text", "") or ""
+                    except Exception:
+                        pass
+            metadata = {k: v for k, v in payload.items() if not k.startswith("_")}
+            node = TextNode(id_=str(record.id), text=text, metadata=metadata)
+            results.append(NodeWithScore(node=node, score=1.0))
+        return results
 
     def _retrieve_with_filters(
         self,
@@ -921,11 +1658,16 @@ class QueryEngine:
         DEFAULT (dense-only) applies the filter as a post-filter and reliably
         returns the expected nodes.
 
-        Using HYBRID as the first attempt means queries that do work in HYBRID
-        mode (e.g. cross-reference expansion with looser filters) benefit from
-        sparse recall without any code changes.
+        DEFAULT is tried first because metadata-filtered lookups (direct article,
+        cross-reference expansion, article viewer) always have tight filters that
+        cause HYBRID mode to return empty results (sparse ANN finds no neighbours
+        under exact-match constraints) before falling through to DEFAULT anyway.
+        Trying DEFAULT first eliminates the wasted sparse_query_fn call and the
+        redundant Qdrant round-trip that HYBRID-first imposed on every such lookup.
+        HYBRID is kept as a fallback so semantically-loose queries still benefit
+        from sparse recall if DEFAULT unexpectedly returns nothing.
         """
-        for mode in (VectorStoreQueryMode.HYBRID, VectorStoreQueryMode.DEFAULT):
+        for mode in (VectorStoreQueryMode.DEFAULT, VectorStoreQueryMode.HYBRID):
             try:
                 retriever = self._vector_index.as_retriever(
                     similarity_top_k=top_k,
@@ -984,10 +1726,34 @@ class QueryEngine:
             verbose=False,
         )
 
-        # Postprocessors: similarity filter first, then reranker (if enabled)
+        # Postprocessors: similarity filter → reranker → title boost (if enabled) → tiebreaker (if enabled)
+        # ParagraphWindowReranker takes precedence over the standard reranker when both are enabled.
+        # When title boost is active and no paragraph reranker, the reranker is widened to
+        # pass_through (top_n=RETRIEVAL_TOP_K) so that title boost makes the final truncation.
         postprocessors = [SimilarityPostprocessor(similarity_cutoff=SIMILARITY_CUTOFF)]
-        if self._reranker is not None:
-            postprocessors.append(self._reranker)
+        para_reranker = getattr(self, "_para_reranker", None)
+        title_booster = getattr(self, "_title_booster", None)
+        tiebreaker = getattr(self, "_tiebreaker", None)
+        if para_reranker is not None:
+            # Paragraph-window reranker handles blending and truncation itself
+            postprocessors.append(para_reranker)
+            if title_booster is not None:
+                postprocessors.append(title_booster)
+        elif self._reranker is not None:
+            if title_booster is not None:
+                # Widen reranker window so title boost can reshuffle all scored nodes
+                from llama_index.core.postprocessor import SentenceTransformerRerank
+                wide_reranker = SentenceTransformerRerank(
+                    top_n=RETRIEVAL_TOP_K, model=RERANKER_MODEL
+                )
+                postprocessors.append(wide_reranker)
+                postprocessors.append(title_booster)
+            else:
+                postprocessors.append(self._reranker)
+        elif title_booster is not None:
+            postprocessors.append(title_booster)
+        if tiebreaker is not None:
+            postprocessors.append(tiebreaker)
 
         return RetrieverQueryEngine.from_args(
             retriever=vector_retriever,

@@ -22,7 +22,7 @@ from src.indexing.bge_m3_sparse import sparse_doc_fn, sparse_query_fn
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_COLLECTION = "eu_crr"
+DEFAULT_COLLECTION = os.getenv("QDRANT_COLLECTION", "eu_crr")
 _DENSE_DIM = 1024  # BGE-M3 dense output dimension
 
 
@@ -55,6 +55,16 @@ class VectorStore:
         self._ensure_collection()
         self._ensure_payload_indexes()
         logger.info("Qdrant collection has %d items.", self.item_count)
+
+    def connect_readonly(self) -> None:
+        """Initialise Qdrant client without creating or modifying the collection."""
+        logger.info(
+            "Connecting to Qdrant (read-only) at %s (collection=%s)",
+            self._qdrant_url,
+            self.collection_name,
+        )
+        self._client = QdrantClient(url=self._qdrant_url, api_key=self._qdrant_api_key)
+        logger.info("Qdrant read-only connection established.")
 
     def reset(self) -> None:
         """Drop and recreate the collection (use before a fresh ingest)."""
@@ -160,7 +170,7 @@ class VectorStore:
         Qdrant requires an index on any field used in a filter. This method is
         idempotent — calling it on a collection that already has the indexes is safe.
         """
-        for field in ("language", "article", "level", "annex_id"):
+        for field in ("language", "article", "level", "annex_id", "part", "title", "chapter", "section"):
             self._client.create_payload_index(
                 collection_name=self.collection_name,
                 field_name=field,

@@ -1,0 +1,31 @@
+2026-03-24 12:27:49,169  INFO      ============================================================
+2026-03-24 12:27:49,169  INFO      CRR Eval Runner
+2026-03-24 12:27:49,169  INFO        run     : run_13_reranker_L12
+2026-03-24 12:27:49,169  INFO        dataset : evals\cases\golden_dataset.jsonl
+2026-03-24 12:27:49,170  INFO        api     : http://localhost:8080
+2026-03-24 12:27:49,170  INFO        output  : evals\results\run_13_reranker_L12_cases.jsonl
+2026-03-24 12:27:49,170  INFO        workers : 4
+2026-03-24 12:27:49,170  INFO        dry-run : False
+2026-03-24 12:27:49,170  INFO        judge   : False
+2026-03-24 12:27:49,171  INFO        git     : bb2ff7d
+2026-03-24 12:27:49,171  INFO        note    : L-12 reranker vs L-6 baseline. Hypothesis: deeper model fixes false_friend ranking     failures at cost of latency.
+2026-03-24 12:27:49,171  INFO      ============================================================
+2026-03-24 12:27:49,176  INFO      Loaded 173 cases from evals\cases\golden_dataset.jsonl.
+2026-03-24 12:27:49,176  INFO      173 cases to evaluate.
+2026-03-24 12:27:51,353  INFO      API healthy — index loaded, 1490 vector store items.
+2026-03-24 12:36:07,670  INFO      
+2026-03-24 12:36:07,670  INFO      ============================================================
+2026-03-24 12:36:07,670  INFO      Run complete: run_13_reranker_L12
+2026-03-24 12:36:07,670  INFO        Cases: 173 ok / 0 failed / 173 total
+2026-03-24 12:36:07,670  INFO        Hit@1:      76.9%
+2026-03-24 12:36:07,670  INFO        Recall@3:   78.8%
+2026-03-24 12:36:07,671  INFO        Recall@5:   82.8%
+2026-03-24 12:36:07,671  INFO        MRR:        0.822
+2026-03-24 12:36:07,671  INFO      
+2026-03-24 12:36:07,671  INFO        --- By citation type ---
+2026-03-24 12:36:07,671  INFO        article_cited  (n=100)  Hit@1=90.0%  Recall@3=85.8%  MRR=0.905
+2026-03-24 12:36:07,671  INFO        open_ended     (n=73)  Hit@1=58.9%  Recall@3=69.1%  MRR=0.708
+2026-03-24 12:36:07,671  INFO      
+2026-03-24 12:36:07,671  INFO        P50 latency: 10257 ms
+2026-03-24 12:36:07,671  INFO        Summary → evals\results\run_13_reranker_L12_summary.json
+2026-03-24 12:36:07,671  INFO      ============================================================

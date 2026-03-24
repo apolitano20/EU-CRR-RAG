@@ -1,0 +1,31 @@
+2026-03-24 11:55:09,344  INFO      ============================================================
+2026-03-24 11:55:09,344  INFO      CRR Eval Runner
+2026-03-24 11:55:09,345  INFO        run     : run_12_adj_tiebreaker
+2026-03-24 11:55:09,345  INFO        dataset : evals\cases\golden_dataset.jsonl
+2026-03-24 11:55:09,345  INFO        api     : http://localhost:8080
+2026-03-24 11:55:09,345  INFO        output  : evals\results\run_12_adj_tiebreaker_cases.jsonl
+2026-03-24 11:55:09,345  INFO        workers : 4
+2026-03-24 11:55:09,345  INFO        dry-run : False
+2026-03-24 11:55:09,345  INFO        judge   : False
+2026-03-24 11:55:09,346  INFO        git     : bb2ff7d
+2026-03-24 11:55:09,346  INFO        note    : Adjacent article tiebreaker delta=0.05. Targets false_friend rank-flips.
+2026-03-24 11:55:09,346  INFO      ============================================================
+2026-03-24 11:55:09,348  INFO      Loaded 173 cases from evals\cases\golden_dataset.jsonl.
+2026-03-24 11:55:09,349  INFO      173 cases to evaluate.
+2026-03-24 11:55:11,510  INFO      API healthy — index loaded, 1490 vector store items.
+2026-03-24 12:02:27,933  INFO      
+2026-03-24 12:02:27,934  INFO      ============================================================
+2026-03-24 12:02:27,934  INFO      Run complete: run_12_adj_tiebreaker
+2026-03-24 12:02:27,934  INFO        Cases: 173 ok / 0 failed / 173 total
+2026-03-24 12:02:27,934  INFO        Hit@1:      78.0%
+2026-03-24 12:02:27,934  INFO        Recall@3:   79.2%
+2026-03-24 12:02:27,934  INFO        Recall@5:   82.4%
+2026-03-24 12:02:27,934  INFO        MRR:        0.824
+2026-03-24 12:02:27,934  INFO      
+2026-03-24 12:02:27,935  INFO        --- By citation type ---
+2026-03-24 12:02:27,935  INFO        article_cited  (n=100)  Hit@1=90.0%  Recall@3=85.8%  MRR=0.905
+2026-03-24 12:02:27,935  INFO        open_ended     (n=73)  Hit@1=61.6%  Recall@3=70.1%  MRR=0.712
+2026-03-24 12:02:27,935  INFO      
+2026-03-24 12:02:27,935  INFO        P50 latency: 9181 ms
+2026-03-24 12:02:27,935  INFO        Summary → evals\results\run_12_adj_tiebreaker_summary.json
+2026-03-24 12:02:27,935  INFO      ============================================================

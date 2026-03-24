@@ -1139,9 +1139,14 @@ class QueryEngine:
 
         all_nodes_for_synthesis = source_nodes + deduped_expanded
 
+        def _snippet(node) -> str:
+            # Prefer display_text (body without hierarchy prefix) for user-facing snippets.
+            raw = node.node.metadata.get("display_text") or node.node.get_content()
+            return raw[:500]
+
         sources = [
             {
-                "text": node.node.get_content()[:500],
+                "text": _snippet(node),
                 "score": float(round(node.score or 0.0, 4)),
                 "metadata": node.node.metadata,
                 "expanded": False,
@@ -1150,7 +1155,7 @@ class QueryEngine:
         ]
         sources += [
             {
-                "text": node.node.get_content()[:500],
+                "text": _snippet(node),
                 "score": 0.0,
                 "metadata": node.node.metadata,
                 "expanded": True,

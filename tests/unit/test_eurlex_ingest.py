@@ -114,6 +114,34 @@ class TestParseWithBeautifulSoup:
         assert "has_table" in meta
         assert "has_formula" in meta
 
+    def test_display_text_stored_in_metadata(self, eurlex_html_en):
+        """display_text must be the raw body without the hierarchy prefix."""
+        docs = ingester("en")._parse_with_beautifulsoup(eurlex_html_en)
+        doc = docs[0]
+        assert "display_text" in doc.metadata
+        # display_text should not start with the hierarchy breadcrumb
+        assert not doc.metadata["display_text"].startswith("Part ")
+
+    def test_document_text_contains_hierarchy_prefix(self, eurlex_html_en):
+        """Document.text (used for embedding) must include the hierarchy breadcrumb."""
+        docs = ingester("en")._parse_with_beautifulsoup(eurlex_html_en)
+        doc = docs[0]
+        # The prefix must mention 'Article' and be at the start of the text
+        assert "Article" in doc.text.split("\n")[0]
+
+    def test_display_text_equals_body_only(self, eurlex_html_en):
+        """display_text + prefix together should reconstruct Document.text."""
+        docs = ingester("en")._parse_with_beautifulsoup(eurlex_html_en)
+        doc = docs[0]
+        display = doc.metadata["display_text"]
+        # The body must appear in the full embedding text
+        assert display in doc.text
+
+    def test_document_text_contains_paragraph_content_after_prefix(self, eurlex_html_en):
+        """The article body (definitions) must still be present after the prefix."""
+        docs = ingester("en")._parse_with_beautifulsoup(eurlex_html_en)
+        assert "definitions" in docs[0].text.lower()
+
 
 # ---------------------------------------------------------------------------
 # Article title extraction

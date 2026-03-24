@@ -29,6 +29,44 @@ logger = logging.getLogger(__name__)
 _NODE_ID_NAMESPACE = uuid.UUID("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
 
 
+def _build_hierarchy_prefix(
+    *,
+    part: Optional[str] = None,
+    title: Optional[str] = None,
+    chapter: Optional[str] = None,
+    section: Optional[str] = None,
+    article: Optional[str] = None,
+    article_title: Optional[str] = None,
+    annex_id: Optional[str] = None,
+    annex_title: Optional[str] = None,
+) -> str:
+    """Build a hierarchy breadcrumb string for contextual embedding.
+
+    Example output:
+        Part III > Title I > Chapter 1 > Section 1 > Article 92 — Capital ratios
+    """
+    parts: list[str] = []
+    if part:
+        parts.append(f"Part {part}")
+    if title:
+        parts.append(f"Title {title}")
+    if chapter:
+        parts.append(f"Chapter {chapter}")
+    if section:
+        parts.append(f"Section {section}")
+    if article:
+        label = f"Article {article}"
+        if article_title:
+            label += f" — {article_title}"
+        parts.append(label)
+    if annex_id:
+        label = f"Annex {annex_id}"
+        if annex_title:
+            label += f" — {annex_title}"
+        parts.append(label)
+    return " > ".join(parts)
+
+
 def _node_id_to_uuid(node_id: str) -> str:
     """Convert a human-readable node_id (e.g. 'art_92_en') to a deterministic UUID.
 
@@ -272,7 +310,19 @@ class EurLexIngester:
         )
         meta = node.to_metadata()
         meta["language"] = self.language
-        return Document(text=text, metadata=meta, id_=_node_id_to_uuid(node.node_id))
+        meta["display_text"] = text
+
+        prefix = _build_hierarchy_prefix(
+            part=hierarchy.get("part"),
+            title=hierarchy.get("title"),
+            chapter=hierarchy.get("chapter"),
+            section=hierarchy.get("section"),
+            article=article_num,
+            article_title=article_title or None,
+        )
+        embedding_text = f"{prefix}\n\n{text}" if prefix else text
+
+        return Document(text=embedding_text, metadata=meta, id_=_node_id_to_uuid(node.node_id))
 
     # ------------------------------------------------------------------
     # Annex processing
@@ -300,7 +350,15 @@ class EurLexIngester:
         )
         meta = node.to_metadata()
         meta["language"] = self.language
-        return Document(text=text, metadata=meta, id_=_node_id_to_uuid(node.node_id))
+        meta["display_text"] = text
+
+        prefix = _build_hierarchy_prefix(
+            annex_id=annex_id,
+            annex_title=annex_title or None,
+        )
+        embedding_text = f"{prefix}\n\n{text}" if prefix else text
+
+        return Document(text=embedding_text, metadata=meta, id_=_node_id_to_uuid(node.node_id))
 
     # ------------------------------------------------------------------
     # Structured text extraction

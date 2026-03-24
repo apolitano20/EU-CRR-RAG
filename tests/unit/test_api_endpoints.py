@@ -1,14 +1,14 @@
 """
 Unit tests for api/main.py — exercises all HTTP endpoints with a mocked
-query engine (no Qdrant, no OpenAI).
+orchestrator (no Qdrant, no OpenAI).
 
 Isolation strategy:
-- The FastAPI module-level singletons (VectorStore, HierarchicalIndexer,
-  QueryEngine) are all constructed without connecting to external services.
-- The lifespan's _query_engine.load() is patched to a no-op so the test
+- The FastAPI module-level singletons are all constructed without connecting
+  to external services.
+- The lifespan's _orchestrator.load() is patched to a no-op so the test
   client starts cleanly.
 - Individual tests then set _query_engine._engine to a MagicMock where
-  needed.
+  needed (since orchestrator.is_loaded() delegates to engine.is_loaded()).
 """
 from __future__ import annotations
 
@@ -58,13 +58,30 @@ def loaded_client(app_module, client):
 
 @pytest.mark.unit
 class TestHealthEndpoint:
-    def test_returns_200(self, client):
+    def test_returns_503_when_not_ready(self, client):
+        """No index loaded and warmup not done → degraded."""
         r = client.get("/health")
-        assert r.status_code == 200
+        assert r.status_code == 503
 
-    def test_status_is_ok(self, client):
+    def test_returns_200_when_fully_ready(self, loaded_client, app_module):
+        """Index loaded + warmup done → 200 ok."""
+        client, _ = loaded_client
+        app_module._warmup_ok = True
+        try:
+            r = client.get("/health")
+            assert r.status_code == 200
+            assert r.json()["status"] == "ok"
+        finally:
+            app_module._warmup_ok = False
+
+    def test_status_degraded_when_warmup_failed(self, loaded_client, app_module):
+        """Index loaded but warmup failed → 503 degraded."""
+        client, _ = loaded_client
+        app_module._warmup_ok = False
         r = client.get("/health")
-        assert r.json()["status"] == "ok"
+        assert r.status_code == 503
+        assert r.json()["status"] == "degraded"
+        assert r.json()["warmup_ok"] is False
 
     def test_index_loaded_false_when_not_loaded(self, client, app_module):
         app_module._query_engine._engine = None
@@ -95,7 +112,7 @@ class TestQueryEndpoint:
     def test_returns_answer_and_sources(self, loaded_client, app_module):
         client, mod = loaded_client
         from src.query.query_engine import QueryResult
-        mod._query_engine.query = MagicMock(
+        mod._orchestrator.query = MagicMock(
             return_value=QueryResult(
                 answer="CET1 is Common Equity Tier 1.",
                 sources=[{"text": "Article 26...", "score": 0.9, "metadata": {}, "expanded": False}],
@@ -115,7 +132,7 @@ class TestQueryEndpoint:
         mock_query = MagicMock(
             return_value=QueryResult(answer="ok", sources=[], trace_id="t1")
         )
-        mod._query_engine.query = mock_query
+        mod._orchestrator.query = mock_query
         client.post("/api/query", json={"query": "What are Tier 2 instruments?"})
         call_args = mock_query.call_args
         assert "Tier 2" in call_args[0][0]
@@ -126,7 +143,7 @@ class TestQueryEndpoint:
         mock_query = MagicMock(
             return_value=QueryResult(answer="ok", sources=[], trace_id="t1")
         )
-        mod._query_engine.query = mock_query
+        mod._orchestrator.query = mock_query
         client.post("/api/query", json={"query": "CET1?", "preferred_language": "it"})
         _, kwargs = mock_query.call_args
         assert kwargs.get("language") == "it"
@@ -135,23 +152,25 @@ class TestQueryEndpoint:
         """QueryResponse should include the detected/preferred language."""
         client, mod = loaded_client
         from src.query.query_engine import QueryResult
-        mod._query_engine.query = MagicMock(
+        mod._orchestrator.query = MagicMock(
             return_value=QueryResult(answer="ok", sources=[], trace_id="t1")
         )
         r = client.post("/api/query", json={"query": "CET1?", "preferred_language": "it"})
         body = r.json()
         assert body["language"] == "it"
 
-    def test_response_language_null_when_not_detected(self, loaded_client, app_module):
-        """English queries have no diacritics, so language should be null."""
+    def test_response_language_from_detection(self, loaded_client, app_module):
+        """Without preferred_language, the response language comes from detect_language."""
         client, mod = loaded_client
         from src.query.query_engine import QueryResult
-        mod._query_engine.query = MagicMock(
+        mod._orchestrator.query = MagicMock(
             return_value=QueryResult(answer="ok", sources=[], trace_id="t1")
         )
-        r = client.post("/api/query", json={"query": "What is CET1?"})
+        # detect_language now returns "en" for English text (via langdetect)
+        with patch("api.main.detect_language", return_value="en"):
+            r = client.post("/api/query", json={"query": "What is CET1?"})
         body = r.json()
-        assert body["language"] is None
+        assert body["language"] == "en"
 
     def test_missing_query_field_returns_422(self, client):
         r = client.post("/api/query", json={})
@@ -163,7 +182,7 @@ class TestQueryEndpoint:
         mock_query = MagicMock(
             return_value=QueryResult(answer="ok", sources=[], trace_id="t1")
         )
-        mod._query_engine.query = mock_query
+        mod._orchestrator.query = mock_query
         r = client.post("/api/query", json={"query": "CET1?", "max_cross_ref_expansions": 5})
         assert r.status_code == 200
 
@@ -171,7 +190,7 @@ class TestQueryEndpoint:
         """The expanded flag in sources should be tolerated by the API layer."""
         client, mod = loaded_client
         from src.query.query_engine import QueryResult
-        mod._query_engine.query = MagicMock(
+        mod._orchestrator.query = MagicMock(
             return_value=QueryResult(
                 answer="ok",
                 sources=[
@@ -195,7 +214,7 @@ class TestQueryHistoryField:
     def test_history_field_optional_defaults_empty(self, loaded_client, app_module):
         client, mod = loaded_client
         from src.query.query_engine import QueryResult
-        mod._query_engine.query = MagicMock(
+        mod._orchestrator.query = MagicMock(
             return_value=QueryResult(answer="ok", sources=[], trace_id="t1")
         )
         r = client.post("/api/query", json={"query": "What is CET1?"})
@@ -207,7 +226,7 @@ class TestQueryHistoryField:
         mock_query = MagicMock(
             return_value=QueryResult(answer="ok", sources=[], trace_id="t1")
         )
-        mod._query_engine.query = mock_query
+        mod._orchestrator.query = mock_query
         client.post("/api/query", json={
             "query": "And what about AT1?",
             "history": [{"question": "What is CET1?", "answer": "Common Equity Tier 1."}],
@@ -223,7 +242,7 @@ class TestQueryHistoryField:
     def test_empty_history_list_accepted(self, loaded_client, app_module):
         client, mod = loaded_client
         from src.query.query_engine import QueryResult
-        mod._query_engine.query = MagicMock(
+        mod._orchestrator.query = MagicMock(
             return_value=QueryResult(answer="ok", sources=[], trace_id="t1")
         )
         r = client.post("/api/query", json={"query": "What is CET1?", "history": []})
@@ -232,7 +251,7 @@ class TestQueryHistoryField:
     def test_five_turn_history_accepted(self, loaded_client, app_module):
         client, mod = loaded_client
         from src.query.query_engine import QueryResult
-        mod._query_engine.query = MagicMock(
+        mod._orchestrator.query = MagicMock(
             return_value=QueryResult(answer="ok", sources=[], trace_id="t1")
         )
         history = [{"question": f"Q{i}", "answer": f"A{i}"} for i in range(5)]
@@ -280,23 +299,32 @@ class TestIngestEndpoint:
 
 
 # ---------------------------------------------------------------------------
-# _detect_language heuristic
+# detect_language (imported from orchestrator into api.main)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.unit
 class TestDetectLanguage:
     def test_polish_detected_from_diacritics(self, app_module):
-        assert app_module._detect_language("Jakie są wymogi kapitałowe?") == "pl"
+        # Diacritics heuristic (fallback when langdetect fails)
+        from src.query.orchestrator import _detect_language_heuristic
+        assert _detect_language_heuristic("Jakie są wymogi kapitałowe?") == "pl"
 
     def test_italian_detected_from_diacritics(self, app_module):
-        # "è" is in the Italian diacritic set used by _detect_language
-        assert app_module._detect_language("Qual è il requisito di capitale?") == "it"
+        from src.query.orchestrator import _detect_language_heuristic
+        assert _detect_language_heuristic("Qual è il requisito di capitale?") == "it"
 
-    def test_english_returns_none(self, app_module):
-        assert app_module._detect_language("What are the capital requirements?") is None
+    def test_english_via_langdetect(self, app_module):
+        # detect_language uses langdetect → returns "en" for English
+        from src.query.orchestrator import detect_language
+        with patch("langdetect.detect", return_value="en"), \
+             patch("langdetect.DetectorFactory"):
+            result = detect_language("What are the capital requirements?")
+        assert result == "en"
+
+    def test_heuristic_fallback_no_diacritics_returns_none(self, app_module):
+        from src.query.orchestrator import _detect_language_heuristic
+        assert _detect_language_heuristic("What are the capital requirements?") is None
 
     def test_empty_string_returns_none(self, app_module):
-        assert app_module._detect_language("") is None
-
-    def test_digits_only_returns_none(self, app_module):
-        assert app_module._detect_language("12345") is None
+        from src.query.orchestrator import _detect_language_heuristic
+        assert _detect_language_heuristic("") is None

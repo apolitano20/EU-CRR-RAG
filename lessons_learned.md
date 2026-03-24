@@ -2,6 +2,198 @@
 
 ---
 
+## [2026-03-24] Paragraph-window reranker: scoring by best paragraph fixes false_friend but hurts diluted_embedding
+
+**Context:** Implementing `ParagraphWindowReranker` based on the codex architectural review, which predicted that scoring whole articles was the main ranking bottleneck.
+**What happened / insight:** The prediction was accurate for `false_friend` (+14.3pp) and `open_ended` (+4.1pp) — cases where the right paragraph was buried inside a long article. However, `diluted_embedding` regressed -16.7pp (6 cases). The likely reason: diluted_embedding failures happen when the right article has no paragraph that matches the query vocabulary — the vocabulary gap is at the article level. Scoring windows makes these cases harder, not easier, because no individual window surfaces the right signal. The codex review also flagged that diluted_embedding needs a different fix (HyDE or hierarchy-prefix embedding).
+**Take-away:** Paragraph-window reranking is a reliable fix for ranking failures where the right article is retrieved but the wrong paragraph dominates the score. It is not a fix for vocabulary-gap retrieval failures. Track `diluted_embedding` separately in future evals and do not expect paragraph-level changes to help it.
+
+---
+
+## [2026-03-24] ToC routing at any threshold regresses overall — retire it
+
+**Context:** Two experiments with ToC routing: run_15 (universal, all queries) and run_16 (selective, fires when max reranker score < 0.55). Both regressed vs run_12 (no ToC).
+**What happened / insight:** Universal routing hurt high-confidence categories (liquidity, own_funds, threshold) more than it helped weak ones. Selective routing with a confidence threshold reduced the harm but couldn't eliminate it — even "low confidence" retrievals that triggered ToC often had correct top-1 results that got displaced by the LLM's routing suggestion. The latency overhead (+30% on run_15) is an additional cost.
+**Take-away:** ToC-style LLM routing is high-variance. It helps on structurally-ambiguous queries but hurts when the retriever already has the right answer at low but real confidence. Do not reintroduce ToC routing unless it is strictly additive (i.e., only fires when retrieval truly failed, not just when confidence is below a threshold). Confidence thresholds are noisy proxies for retrieval failure.
+
+---
+
+## [2026-03-24] Auto-start API silently fails when old process holds the port — check netstat first
+
+**Context:** Running `python -m evals.run_eval --auto-start-api` reported the API never became healthy within 120s.
+**What happened / insight:** The old uvicorn process was still alive and holding port 8080. The auto-start spawns a new uvicorn with `stderr=DEVNULL`, so the "address already in use" error is completely silent. The new process exits immediately, and the runner waits 120s for a health check that never comes.
+**Take-away:** Before running `--auto-start-api`, verify the port is free with `netstat -ano | grep :8080`. If a process is listed, kill it (`taskkill /PID <pid> /F`) before relying on auto-start. Alternatively, always start the API manually in a separate terminal where stdout/stderr are visible.
+
+---
+
+## [2026-03-24] Dashboard comparison tables that show only one metric hide gains in complementary metrics
+
+**Context:** The `_comparison_table()` in `evals/dashboard.py` originally only showed Recall@3. After run_12, the adjacent tiebreaker produced +1.7pp Hit@1 and +14.3pp false_friend Hit@1, but the user saw "no improvement" in the dashboard because the tiebreaker only moves rank 1 vs rank 2 — Recall@3 is completely unaffected when the right article was already in top-3.
+**What happened / insight:** A postprocessor that reorders rank-1 and rank-2 produces zero Recall@3 signal by definition. The entire gain is in Hit@1 and MRR. Showing only Recall@3 made a successful experiment look like a no-op.
+**Take-away:** Comparison tables should always show at least Hit@1, Recall@3, and MRR together. When evaluating a rank-reordering change (tiebreaker, score blending), Hit@1 and MRR are the primary metrics; Recall@k only captures whether the right article is in the pool, not whether it's ranked first.
+
+---
+
+## [2026-03-24] run_10b was made redundant by run_2e — check active config before planning experiments
+
+**Context:** run_10b was planned to test surgical synonyms after run_2e. When run_2e was actually run, its config showed `USE_ENRICHMENT=True` and the synonym code was already committed — meaning run_2e already captured the effect of the synonyms.
+**What happened / insight:** Experiment plans written before code is merged can become stale. run_10b was designed when the synonyms were still a pending change; by the time run_2e ran, the synonyms were live in the codebase.
+**Take-away:** Before launching a planned experiment, verify the active server config (dashboard config panel or `_config.json`) to confirm that the intended change is actually isolated. If the planned change is already baked into the baseline, the experiment is redundant — cross it off rather than running it.
+
+---
+
+## [2026-03-24] FastAPI response serialization failures bypass all custom exception handlers
+
+**Context:** Debugging case_161 HTTP 500 — the error returned `content-type: text/plain` ("Internal Server Error") instead of JSON, even though both a `@app.exception_handler(Exception)` handler and an endpoint-level `except BaseException` block were in place.
+**What happened / insight:** When FastAPI serializes the response model to JSON (via `jsonable_encoder`), this happens *after* the endpoint `return` statement, inside FastAPI's routing internals. Exceptions thrown there propagate directly to Starlette's `ServerErrorMiddleware` (the outermost layer), bypassing both the endpoint's `except` block and all registered `@app.exception_handler` handlers. The tell is `content-type: text/plain; charset=utf-8` with body "Internal Server Error" — that is Starlette's built-in fallback, not FastAPI's JSON error response. Debug by adding file writes inside the exception handlers; if nothing is written, the failure is in serialization, not in the handler.
+**Take-away:** Never put non-JSON-serializable values in Pydantic response model fields. For `list[dict]` fields, ensure all numeric values are Python `float`/`int`, not numpy types. In particular, always wrap reranker scores with `float()` when building source dicts.
+
+---
+
+## [2026-03-24] numpy.float32 is not JSON serializable; float32 arithmetic propagates silently through score pipelines
+
+**Context:** `_multi_query_retrieve` in `orchestrator.py` was the only path where reranked node scores were exposed directly in the HTTP response without `float()` conversion.
+**What happened / insight:** `CrossEncoder.predict()` returns a numpy array of `float32`. `BlendedReranker` computes blended scores as `alpha * python_float + (1-alpha) * numpy.float32 = numpy.float32`. `round(numpy.float32, 4)` returns `numpy.float32` (not Python `float`). `json.dumps({"score": numpy.float32(...)})` raises `TypeError`. The regular `engine.retrieve` path already used `float(round(node.score or 0.0, 4))` — `_multi_query_retrieve` was the only place missing the `float()` wrapper. The bug only manifested for case_161 because it was the only golden-dataset query that is (a) classified `CRR_SPECIFIC` (no article number mentioned) AND (b) matches `_MULTI_HOP_RE` — the only path through `_multi_query_retrieve`.
+**Take-away:** Whenever building a source/score dict that will be included in an HTTP response, always use `float(round(score or 0.0, 4))`, not just `round(...)`. Keep this consistent across all code paths (`_multi_query_retrieve`, ToC merge, engine.retrieve). Also: `numpy.float64` IS JSON serializable in Python's stdlib json; `numpy.float32` is NOT. If in doubt, always call `float()`.
+
+---
+
+## [2026-03-21] Shared mutable JSONL as write path + state model causes duplicate rows, overflow, and stale summaries
+
+**Context:** Codex code review of `evals/run_eval.py` and `evals/dashboard.py` — eval pipeline producing inflated progress counts, duplicate result rows, and misleading summaries.
+**What happened / insight:** All observed bugs traced to a single design choice: the `*_cases.jsonl` file was used simultaneously as the durable result store, the resume checkpoint, the progress counter, and the summary input. Once any of these roles produced corrupt data (duplicates from concurrent threads, malformed partial writes on crash), every downstream stage was poisoned. Concretely: (1) multiple threads opened the file in append mode with no lock — interleaved writes could corrupt rows; (2) the timeout branch wrote synthetic error rows for "stuck" futures, but `pool.shutdown(wait=False)` left those threads alive — a late-completing worker added a second row for the same ID; (3) progress bar used raw line count as the numerator, so duplicates pushed it above 100%; (4) summary aggregation consumed all rows including duplicates, distorting every mean.
+**Take-away:** A JSONL file is an output format, not a state machine. If you need resumability, deduplication, and progress tracking, maintain them separately: (a) a single writer with a `threading.Lock` + a `_written_ids` set; (b) a per-run `state.json` written atomically (temp file + `os.replace()`); (c) progress counted as unique parsed IDs, not raw lines; (d) summary reload via a `_load_dataset` that deduplicates by ID. Generate the JSONL as a derived artefact — never read it back as the canonical truth without deduplication.
+
+---
+
+## [2026-03-21] `@st.cache_data` keyed only by path string returns stale data when files change in place
+
+**Context:** `_load_run` and `_load_summary` in `evals/dashboard.py` decorated with `@st.cache_data(show_spinner=False)` and called with a string path argument.
+**What happened / insight:** Streamlit's `@st.cache_data` caches the return value keyed by the function arguments. If the file at the same path is overwritten (e.g. a completed eval run replaces an in-progress one), the cache returns the old DataFrame/dict because the path string is unchanged. The user sees old summary numbers even after the run completes.
+**Take-away:** For any cached loader of a mutable file, add a `file_mtime: float` parameter and pass `Path(p).stat().st_mtime` at the call site. Streamlit includes this in the cache key, so the cache invalidates whenever the file is modified. Do NOT use the `_`-prefix convention (Streamlit treats those as unhashed); use a normal float parameter name.
+
+---
+
+## [2026-03-21] Score blending for reranker: neutral at all alpha values when regressions are caused by strong reranker confidence
+
+**Context:** Implementing `BlendedReranker` to fix two rank-flip regressions (case_136: 506c above 26; case_149: 395 above 392) caused by `ms-marco-MiniLM-L-6-v2` promoting adjacent/transitional articles.
+**What happened / insight:** At alpha=0.3 (30% retrieval, 70% reranker), case_149 was fixed but case_152 broke (reranker demoted the correct article). At alpha=0.6 (60% retrieval, 40% reranker), case_149 was still fixed but both case_109 and case_152 regressed. Case_136 was never fixed at any alpha — the reranker's confidence in 506c over 26 was too strong for blending to overcome without harming other cases. Net Hit@1 was identical or worse vs pure reranker at every alpha value tried.
+**Take-away:** Score blending is not the right fix when a general-purpose reranker is systematically wrong about a specific article pair (e.g. transitional provision vs primary article). The root cause is the reranker having no domain knowledge. Proper fixes: (a) domain-specific reranker fine-tuning with (query, correct_article, wrong_article) triplets, or (b) a heuristic rule targeting transitional articles specifically (e.g. deprioritise articles with "transitional" in their title when the query doesn't mention transitional provisions).
+
+---
+
+## [2026-03-21] `bge-reranker-v2-m3` SIGSEGVs when coloaded with BGE-M3 on Windows CPU; `ms-marco-MiniLM-L-6-v2` does not
+
+**Context:** Unblocking Phase 1 reranker after installing CPU-only torch resolved the `shm.dll` DLL crash.
+**What happened / insight:** `BAAI/bge-reranker-v2-m3` (via `FlagEmbeddingReranker`) caused SIGSEGV at inference time when BGE-M3 was already loaded in the same process on Windows CPU. The crash happened on the first query, not at startup. `cross-encoder/ms-marco-MiniLM-L-6-v2` (via `SentenceTransformerRerank` / `sentence-transformers.CrossEncoder`) coexists with BGE-M3 without any conflict — confirmed by loading both models sequentially and running inference.
+**Take-away:** On Windows CPU, use `sentence-transformers` cross-encoders for reranking, not `FlagEmbedding`-based rerankers. The `ms-marco-MiniLM-L-6-v2` model is also faster (lighter model) and has no licensing issues. Set `RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2` in `.env`. The `BlendedReranker` class in `query_engine.py` also uses `CrossEncoder` directly, so it is safe on Windows.
+
+---
+
+## [2026-03-21] General-purpose cross-encoders promote semantically similar but legally wrong articles
+
+**Context:** Analysing why reranker regressions occur on false-friend cases (case_136: 506c vs 26; case_149: 395 vs 392).
+**What happened / insight:** `ms-marco-MiniLM-L-6-v2` was trained on MS MARCO web search queries. It scores relevance based on textual overlap and semantic similarity, not legal hierarchy. Article 506c (a transitional provision) contains language nearly identical to Article 26 (the primary rule it overrides). The reranker correctly identifies high textual overlap and ranks 506c first — but legally, 506c is secondary. Similarly, 395 (large exposure limits) contains much of the same vocabulary as 392 (definition of connected clients), causing a rank flip.
+**Take-away:** General-purpose cross-encoders are blind to legal document hierarchy (primary article vs transitional provision, definition vs application rule). For legal RAG, accept these regressions as the cost of using a general reranker, or invest in fine-tuning with domain-specific (query, relevant, irrelevant) triplets. Document the known bad pairs: (case_136: 506c/26), (case_149: 395/392).
+
+---
+
+## [2026-03-20] PyTorch `shm.dll` crash on Windows blocks reranker — requires CPU-only torch or Linux
+
+**Context:** Setting `USE_RERANKER=true` in `.env` and restarting the API server on Windows.
+**What happened / insight:** `FlagReranker` import triggers `torch/__init__.py` → `_load_dll_libraries()` → `OSError: [WinError 1114] A dynamic link library (DLL) initialization routine failed` on `shm.dll`. The server crashes immediately on startup before serving any request. This is a PyTorch Windows shared-memory DLL incompatibility, not a code bug. Fix options: (a) reinstall CPU-only torch (`pip install torch --index-url https://download.pytorch.org/whl/cpu`), or (b) run on Colab/Linux where CUDA or CPU-only torch works without the DLL issue.
+**Take-away:** Phase 1 reranker cannot be tested locally on Windows. Revert `USE_RERANKER=false` immediately if the server fails to start. The rest of the eval infrastructure (eval runner, dashboard) works locally; only the reranker step needs Colab/Linux.
+
+---
+
+## [2026-03-20] "Missing articles" is rarely the cause of hard failures — check the exception first
+
+**Context:** 13 hard failures all with `status=error`, suspected articles 115, 121, 122, 132a, 132c, 152, 242, 243, 254, 258, 429b missing from the index.
+**What happened / insight:** All 11 articles were in the index with correct node counts. The hard failures were code crashes (unhandled exceptions), not missing data. The original `api/main.py` caught `HTTPException` only; any other exception produced a silent HTTP 500 with no logged traceback. Adding a broad `except Exception` with `exc_info=True` is needed before any diagnosis is meaningful.
+**Take-away:** Before concluding data is missing, always: (1) add `except Exception` with `exc_info=True` in the query handler, (2) reproduce a single failing case and read the server log. Only investigate the index if the log shows a retrieval/lookup error specifically. Missing-data hypotheses waste time when the real cause is an unhandled exception.
+
+---
+
+## [2026-03-20] `as_completed()` never yields a hung future — use `wait()` with timeout instead
+
+**Context:** Eval runner stuck at N/50; Codex Review 2 diagnosed the root cause in `evals/run_eval.py`.
+**What happened / insight:** `for fut in as_completed(futures)` only yields futures that have *already completed*. A future that is stuck (e.g. a socket that never times out) is never yielded, so `fut.result(timeout=...)` inside the loop body is never reached for it. The loop blocks inside `as_completed()` forever. Additionally, the `with ThreadPoolExecutor(...) as pool:` context manager calls `shutdown(wait=True)` on exit, which also blocks on any still-running thread. The fix: replace `as_completed` with `concurrent.futures.wait(pending, timeout=_fut_timeout, return_when=FIRST_COMPLETED)` in a `while pending` loop. When `done_set` is empty, all remaining futures are stuck — record timeout errors and break. Use explicit pool + `pool.shutdown(wait=False)` in `finally` to avoid the context-manager hang.
+**Take-away:** Never rely on `fut.result(timeout=...)` inside an `as_completed` loop as a hang guard — `as_completed` won't yield the hung future in the first place. The only safe pattern for per-future timeouts is a `wait(..., timeout=T, return_when=FIRST_COMPLETED)` polling loop that detects `done_set=empty`.
+
+---
+
+## [2026-03-20] FastAPI sync endpoints saturate the thread pool under parallel load
+
+**Context:** `/api/query` defined as `def query(...)` (synchronous); eval runner fires 4 parallel requests.
+**What happened / insight:** FastAPI runs sync endpoints in its worker thread pool. If several calls block in BGE-M3 inference or Qdrant round-trips, those worker threads stay occupied. Once the pool is saturated, later requests queue *before* the handler body runs — so they look like "server stopped responding" rather than a 5xx. The logging middleware (which only fires after `call_next()` returns) makes queued/hung requests invisible in logs.
+**Take-away:** Any endpoint that calls blocking I/O or CPU-heavy work must be `async def` with `asyncio.to_thread(...)`. Wrap with `asyncio.wait_for(..., timeout=N)` and return 504 on expiry so the client connection is never held open indefinitely. This is a mitigation (the underlying thread still runs), but it frees the event loop and unblocks later requests.
+
+---
+
+## [2026-03-20] Concurrent CPU BGE-M3 encodes cause latency amplification, not just slowness
+
+**Context:** Eval runner with `--workers 4` firing parallel queries; each query calls `_get_model().encode()` for both sparse and dense vectors.
+**What happened / insight:** FlagEmbedding is not documented as re-entrant. Under 4 concurrent CPU encode calls, the model oversubscribes available cores, causing all calls to slow down dramatically (10–60× normal latency). This is not a deadlock, but the wall-clock spike is large enough that HTTP timeouts fire, making it *look* like a deadlock. Adding `_encode_lock = threading.Lock()` around every `encode()` call serializes them: throughput drops but latency becomes predictable, and requests that previously timed out now succeed.
+**Take-away:** On CPU, serialize BGE-M3 `encode()` calls with a module-level lock. The tradeoff (throughput ↓, latency predictable) is worth it for eval stability. On GPU this lock can be removed once concurrency is validated.
+
+---
+
+## [2026-03-20] `subprocess.PIPE` without a drain thread blocks child processes under load
+
+**Context:** `evals/run_eval.py --auto-start-api` starts uvicorn with `stdout=PIPE, stderr=STDOUT`; parent never reads the pipe.
+**What happened / insight:** OS pipe buffers are typically 64 KB. When uvicorn logs more than that (which happens quickly under load), it blocks on the write syscall, appearing as the API "freezing". The parent process never reads the pipe, so the buffer never drains. The symptom is indistinguishable from a real API hang.
+**Take-away:** If you don't intend to read a subprocess's stdout/stderr, always redirect to `DEVNULL` (`stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL`). Never use `PIPE` for output you won't consume.
+
+---
+
+## [2026-03-20] LLM-judge metrics in compare.py: skip rows when both runs are None, not percentage-formatted
+
+**Context:** Extending `evals/compare.py` `METRIC_KEYS` to include judge metrics (`judge_correctness` etc.) and updating `print_report()`.
+**What happened / insight:** Two non-obvious details arise when judge metrics share the same `METRIC_KEYS` list as retrieval metrics: (1) Retrieval metrics are percentage-formatted (`* 100`) in print/display; judge metrics are raw 0–1 floats and must not be multiplied. The `as_pct` flag must exclude all `JUDGE_METRIC_KEYS`. (2) When neither compared run used `--judge`, all judge metric deltas are `None`. Printing `—` for every judge row is noisy. The fix is to skip judge rows in `print_report()` when `va is None and vb is None`.
+**Take-away:** When sharing a metric-key list across heterogeneous metric types (percentage vs raw score), always check the `as_pct` logic for every new metric type. Conditionally skip rows with all-None values in text reports; hide sections in UIs.
+
+---
+
+## [2026-03-19] LLM-generated eval datasets: skip giant articles, tag adversarial batches in `notes`
+
+**Context:** Building `evals/generate_golden_dataset.py` to auto-generate a golden dataset from Qdrant.
+**What happened / insight:** Article 4 is 60k chars (129 definitions) — sending it to GPT in a prompt hits context limits and produces useless output (it would just summarise definitions, not generate meaningful retrieval test cases). It also has a dedicated fast-path in the query engine, so RAG eval doesn't apply. Similarly, adversarial batch cases (Pass 2) need to be distinguishable from article-anchored cases (Pass 1) for resumability checks — tagging `notes` with `batch=<id>` lets the script skip already-processed batches on re-run without a separate tracking file.
+**Take-away:** Always skip articles with known special handling (fast-paths, giant size) from RAG eval generation. For resumability in multi-pass generators, embed a stable identifier in a freetext field of the output record (e.g. `notes`) rather than maintaining a separate state file — it survives crashes and partial outputs equally well.
+
+---
+
+## [2026-03-19] Qdrant payload text lives in `_node_content` JSON blob, not top-level `text`
+
+**Context:** Extracting article text from Qdrant payloads in `generate_golden_dataset.py` and `definitions_store.py`.
+**What happened / insight:** LlamaIndex stores node text inside a `_node_content` JSON blob (e.g. `{"text": "...", "metadata": {...}}`), not in a top-level `text` field. Some payloads have both (top-level `text` is populated for some node types); others have only `_node_content`. Any code that reads Qdrant payloads directly (outside LlamaIndex) must handle both patterns.
+**Take-away:** Always use this two-step fallback when extracting text from raw Qdrant payloads: `text = payload.get("text", "") or ""; if not text: text = json.loads(payload.get("_node_content", "{}")).get("text", "")`. This pattern is the canonical one for this codebase — see `definitions_store.py:163-172` and `generate_golden_dataset.py:extract_text_from_payload()`.
+
+---
+
+## [2026-03-18] `_DEF_QUERY_RE` is a false-positive trap for abbreviation-expanded queries
+
+**Context:** Writing `classify()` in `QueryOrchestrator` — calling `_normalise_query()` before `_detect_definition_query()` so that article refs are canonicalised before classification.
+**What happened / insight:** "What is CET1?" normalises to "What is CET1 (Common Equity Tier 1)?". The parenthetical `(Common Equity Tier 1)` contains `(` which is not in the term capture group `[\w\s\-]*?`, so the regex cannot advance past it and fails to match. The query that looks like a definition query becomes CRR_SPECIFIC post-normalisation. This is the *correct* outcome (the term is already expanded), but tests that expect `classify("What is CET1?") == DEFINITION` will fail.
+**Take-away:** When writing classification tests involving abbreviation-expanded queries, check what `_normalise_query` produces first. "What is CET1?" → CRR_SPECIFIC (because expansion breaks the regex); "What is the definition of institution?" → DEFINITION (no expansion, clean term). Use unexpanded terms or `define X` phrasing when you need a reliable DEFINITION classification in tests.
+
+---
+
+## [2026-03-18] Tests referencing module-level singletons must be updated when singletons change
+
+**Context:** Refactoring `api/main.py` to replace `_query_engine.query()` routing with `_orchestrator.query()`. `test_api_endpoints.py` mocked `mod._query_engine.query` in every test.
+**What happened / insight:** After the refactor, all `TestQueryEndpoint` and `TestQueryHistoryField` tests that set `mod._query_engine.query = MagicMock(...)` still "worked" at mock-assignment time but `_orchestrator.query()` was never intercepted — the orchestrator held its own reference to the engine and called its own `.query()` method, bypassing the mock entirely. Tests either got `AttributeError` (as_retriever on None) or returned unexpected results.
+**Take-away:** When a new facade/orchestrator wraps an existing singleton, update all test fixtures that mock the old singleton's methods to mock the facade's methods instead. Also update the `client` fixture to patch the facade's `.load()` rather than the underlying engine's `.load()`.
+
+---
+
+## [2026-03-18] f-string expressions cannot span adjacent string literal boundaries
+
+**Context:** Writing `yield` statements in `query_stream()` with long `json.dumps(dict)` calls that exceeded one line.
+**What happened / insight:** Writing `f"data: {json.dumps({'key': val, " f"'key2': val2})}\n\n"` (split across two adjacent f-string literals) is a syntax/runtime error — the `json.dumps(...)` expression is not split at a valid Python boundary. Adjacent string literal concatenation is resolved at compile time per literal; f-string expressions `{...}` are local to each literal.
+**Take-away:** For long `json.dumps` calls inside f-strings, always build the dict as a variable first, then do `f"data: {json.dumps(event)}\n\n"` on a single line. Never split a `{expression}` across adjacent f-string literals.
+
+---
+
 ## [2026-03-18] Regex with `[\w\s]` capture + lazy quantifier + `\?`/`$` end anchor matches arbitrarily long phrases
 
 **Context:** Writing `_DEF_QUERY_RE` to detect definition queries like "what is institution?" — the term capture group used `[\w\s\-]*?` (lazy) with end condition `\?|$`.
@@ -269,6 +461,20 @@ Bad request: Index required but not found for "language" of one of the following
 **Fix:** Call `client.create_payload_index(collection_name=..., field_name=field, field_schema=PayloadSchemaType.KEYWORD)` for every field you filter on. This is idempotent — safe to call on existing collections. Add it to `VectorStore._ensure_payload_indexes()` and call it from `connect()` so it runs for both new and existing collections.
 
 Fields to index for this project: `language`, `article`, `level`.
+
+---
+
+## [2026-03-19] `_retrieve_with_filters`: try DEFAULT before HYBRID to avoid wasted BGEm3 encode calls
+
+**Context:** Direct article lookups and cross-reference expansion use `_retrieve_with_filters`, which originally tried HYBRID mode first.
+
+**What happened / insight:** HYBRID mode requires **two separate** BGEm3 `model.encode()` calls: one for the dense vector (`BGEm3Embedding._get_query_embedding`) and one for the sparse vector (`sparse_query_fn`). Each is a CPU-intensive model forward pass (~2–5 s on CPU). Moreover, HYBRID mode with an exact-match metadata filter (article=X) almost always returns **empty results** — the sparse ANN index finds no approximate neighbours under tight metadata constraints. The code then falls back to DEFAULT mode, which runs yet another BGEm3 encode. Net result: 3 encode calls for the common case, wasting 6–15 s before the actual retrieval succeeds.
+
+**Fix:** Swap the order in `_retrieve_with_filters` to `(DEFAULT, HYBRID)`. DEFAULT (dense-only) applies the metadata filter as a post-filter and reliably returns results. HYBRID is kept as a fallback for semantically loose queries that might benefit from sparse recall.
+
+**Impact:** Direct article lookup latency dropped from ~30–60 s (biblical) to ~5–10 s on CPU. Cross-reference expansion (3 articles × DEFAULT-first) similarly improved.
+
+**Take-away:** For metadata-filtered retrievals (exact article/annex lookup), DEFAULT mode is always the right first choice. HYBRID's sparse encoding adds cost with no retrieval benefit when the filter is highly selective.
 
 ---
 

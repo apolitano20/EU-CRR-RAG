@@ -1,0 +1,31 @@
+2026-03-24 14:54:02,002  INFO      ============================================================
+2026-03-24 14:54:02,002  INFO      CRR Eval Runner
+2026-03-24 14:54:02,002  INFO        run     : run_16_toc_confidence
+2026-03-24 14:54:02,002  INFO        dataset : evals\cases\golden_dataset.jsonl
+2026-03-24 14:54:02,003  INFO        api     : http://localhost:8080
+2026-03-24 14:54:02,003  INFO        output  : evals\results\run_16_toc_confidence_cases.jsonl
+2026-03-24 14:54:02,003  INFO        workers : 3
+2026-03-24 14:54:02,003  INFO        dry-run : False
+2026-03-24 14:54:02,003  INFO        judge   : False
+2026-03-24 14:54:02,003  INFO        git     : bb2ff7d
+2026-03-24 14:54:02,003  INFO        note    : Post-retrieval ToC gating: ToC fires only when max reranker score < 0.55, targeting diluted_embedding/false_friend without penalising high-confidence retrievals. Sequential (not parallel) to avoid unconditional latency overhead seen in run_15.
+2026-03-24 14:54:02,004  INFO      ============================================================
+2026-03-24 14:54:02,006  INFO      Loaded 173 cases from evals\cases\golden_dataset.jsonl.
+2026-03-24 14:54:02,006  INFO      173 cases to evaluate.
+2026-03-24 14:54:04,191  INFO      API healthy — index loaded, 1490 vector store items.
+2026-03-24 15:04:55,789  INFO      
+2026-03-24 15:04:55,792  INFO      ============================================================
+2026-03-24 15:04:55,792  INFO      Run complete: run_16_toc_confidence
+2026-03-24 15:04:55,792  INFO        Cases: 173 ok / 0 failed / 173 total
+2026-03-24 15:04:55,793  INFO        Hit@1:      77.5%
+2026-03-24 15:04:55,794  INFO        Recall@3:   79.2%
+2026-03-24 15:04:55,795  INFO        Recall@5:   82.7%
+2026-03-24 15:04:55,795  INFO        MRR:        0.821
+2026-03-24 15:04:55,795  INFO      
+2026-03-24 15:04:55,796  INFO        --- By citation type ---
+2026-03-24 15:04:55,796  INFO        article_cited  (n=100)  Hit@1=90.0%  Recall@3=85.8%  MRR=0.905
+2026-03-24 15:04:55,796  INFO        open_ended     (n=73)  Hit@1=60.3%  Recall@3=70.1%  MRR=0.706
+2026-03-24 15:04:55,797  INFO      
+2026-03-24 15:04:55,797  INFO        P50 latency: 9888 ms
+2026-03-24 15:04:55,797  INFO        Summary → evals\results\run_16_toc_confidence_summary.json
+2026-03-24 15:04:55,798  INFO      ============================================================

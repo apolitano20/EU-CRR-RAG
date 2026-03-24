@@ -1,0 +1,33 @@
+2026-03-24 13:55:00,508  INFO      ============================================================
+2026-03-24 13:55:00,509  INFO      CRR Eval Runner
+2026-03-24 13:55:00,509  INFO        run     : run_15_toc2
+2026-03-24 13:55:00,510  INFO        dataset : evals\cases\golden_dataset.jsonl
+2026-03-24 13:55:00,510  INFO        api     : http://localhost:8080
+2026-03-24 13:55:00,510  INFO        output  : evals\results\run_15_toc2_cases.jsonl
+2026-03-24 13:55:00,511  INFO        workers : 1
+2026-03-24 13:55:00,511  INFO        dry-run : False
+2026-03-24 13:55:00,512  INFO        judge   : False
+2026-03-24 13:55:00,513  INFO        git     : bb2ff7d
+2026-03-24 13:55:00,513  INFO        note    : ToC routing re-run with timeout bugs fixed (sync shutdown/async wait_for, timeout=10s)
+2026-03-24 13:55:00,514  INFO      ============================================================
+2026-03-24 13:55:00,517  INFO      Loaded 173 cases from evals\cases\golden_dataset.jsonl.
+2026-03-24 13:55:00,518  INFO      173 cases to evaluate.
+2026-03-24 13:55:02,679  INFO      API healthy — index loaded, 1490 vector store items.
+2026-03-24 14:02:52,597  INFO        retry 1/2 for case_030 in 5s…
+2026-03-24 14:08:59,672  INFO        retry 1/2 for case_048 in 5s…
+2026-03-24 14:36:29,155  INFO      
+2026-03-24 14:36:29,159  INFO      ============================================================
+2026-03-24 14:36:29,159  INFO      Run complete: run_15_toc2
+2026-03-24 14:36:29,160  INFO        Cases: 173 ok / 0 failed / 173 total
+2026-03-24 14:36:29,160  INFO        Hit@1:      76.3%
+2026-03-24 14:36:29,163  INFO        Recall@3:   80.2%
+2026-03-24 14:36:29,163  INFO        Recall@5:   85.1%
+2026-03-24 14:36:29,164  INFO        MRR:        0.824
+2026-03-24 14:36:29,164  INFO      
+2026-03-24 14:36:29,164  INFO        --- By citation type ---
+2026-03-24 14:36:29,164  INFO        article_cited  (n=100)  Hit@1=89.0%  Recall@3=85.8%  MRR=0.900
+2026-03-24 14:36:29,164  INFO        open_ended     (n=73)  Hit@1=58.9%  Recall@3=72.4%  MRR=0.719
+2026-03-24 14:36:29,165  INFO      
+2026-03-24 14:36:29,165  INFO        P50 latency: 13101 ms
+2026-03-24 14:36:29,165  INFO        Summary → evals\results\run_15_toc2_summary.json
+2026-03-24 14:36:29,168  INFO      ============================================================

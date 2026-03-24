@@ -5,6 +5,189 @@ For open tasks and backlog, see `WORKLOG.md`.
 
 ---
 
+## 2026-03-24 — run_17: Paragraph-window reranker — new best Hit@1=80.3% (+2.3pp vs run_12)
+
+Implemented `ParagraphWindowReranker` in `src/query/query_engine.py`: instead of scoring full article text against the query, splits each retrieved article into paragraph windows (split on `\n\n`, evenly sampled up to `PARAGRAPH_WINDOW_MAX_WINDOWS=4`) and uses the best window's CrossEncoder score as the article's rerank score. Blends with retrieval score via `RERANK_BLEND_ALPHA`. Stores the best-matching window in `node.metadata["best_paragraph"]` for future display use. Enabled via `USE_PARAGRAPH_WINDOW_RERANKER=true`; replaces `USE_RERANKER` (same model, avoids loading twice). Also shipped: `QDRANT_COLLECTION` env var, Qdrant payload indexes for `part`/`title`/`chapter`/`section`, and selective cross-ref expansion (top-2 nodes only, joint reranking of expanded nodes).
+
+run_17 results vs run_12 (n=173, no judge): Overall Hit@1: 78.0% → **80.3%** (+2.3pp), MRR: 0.824 → **0.840** (+1.6pp). `false_friend` +14.3pp, `open_ended` +4.1pp, `negative` +12.5pp, `hard` difficulty +3.7pp. `diluted_embedding` -16.7pp (6 cases, small n). Latency +800ms (10.7s mean). **Current best.**
+
+---
+
+## 2026-03-24 — run_16: Selective ToC confidence-gated routing — regression, ToC retired
+
+Ran `USE_TOC_ROUTING=true`, `TOC_CONFIDENCE_THRESHOLD=0.55` (ToC fires only when post-retrieval max reranker score < 0.55). Hit@1=77.46% vs run_12's 78.0% — still a net regression. Both universal (run_15) and selective (run_16) ToC routing have now regressed. ToC routing retired; `USE_TOC_ROUTING=false` in active config.
+
+---
+
+## 2026-03-24 — Dashboard comparison tables: all metrics + magnitude-based colour gradients
+
+Rewrote `_comparison_table()` in `evals/dashboard.py` to show all 7 retrieval metrics (Hit@1, Recall@1, Recall@3, Recall@5, MRR, Prec@3, Prec@5) plus judge metrics when enabled, each with A/B/Δ columns. Delta cells are colour-coded with magnitude-aware gradients (near-white for <0.5pp noise, through to fully saturated green/red for ≥15pp), making the direction and magnitude of changes readable at a glance. Single vs Multi-Article tab now also shows the comparison. Previously the table only showed Recall@3 in a single-metric layout.
+
+---
+
+## 2026-03-24 — run_12: Adjacent article tiebreaker — +1.7pp Hit@1, false_friend +14.3pp
+
+Implemented `AdjacentArticleTiebreakerPostprocessor` in `src/query/query_engine.py`: a post-rerank pass that fires when the top-2 nodes are adjacent articles (same numeric base e.g. 429/429a, or consecutive integers e.g. 114/115) within a configurable score gap, preferring the article whose title has more query-token overlap. Enabled via `ADJACENT_TIEBREAK_DELTA=0.05` in `.env` (0.0 = disabled). Wired into the postprocessor chain after the reranker; captured in eval config snapshot and dashboard config panel.
+
+run_12 results vs run_2e baseline (n=173, no judge):
+- Overall Hit@1: 76.3% → **78.0%** (+1.7pp), MRR: 0.815 → **0.824** (+0.009)
+- `false_friend` Hit@1: 35.7% → **50.0%** (+14.3pp) — 2 cases flipped at rank 1
+- `large_exposures` Hit@1: +2.9pp; `multi_hop` Hit@1: +2.1pp; `open_ended` Hit@1: +4.1pp
+- `hard` difficulty Hit@1: 65.9% → **69.5%** (+3.6pp)
+- No meaningful regressions. **Tiebreaker kept as permanent config.**
+
+---
+
+## 2026-03-24 — run_2e_baseline: clean full-173 reference baseline with judge scores
+
+Ran the first clean full-173-case eval with 0 failures and judge enabled (workers=1 to avoid timeout race conditions that caused 4 failures in run_2d with workers=4). Established as the reference baseline for all subsequent experiments. Key metrics: Hit@1=76.3%, Recall@3=79.3%, MRR=0.815, Judge Correctness=0.770, Judge Completeness=0.777, Judge Faithfulness=0.790. Confirmed that surgical synonyms (run_10 additions) were already active via USE_ENRICHMENT=True — run_10b as a separate experiment was redundant.
+
+---
+
+## 2026-03-24 — Fix case_161 systematic HTTP 500 error (numpy.float32 not JSON serializable)
+
+Diagnosed and fixed a bug that caused case_161 to fail with HTTP 500 in every eval run where `_generate_sub_queries` succeeded. Root cause: `_multi_query_retrieve` in `orchestrator.py` built sources with `round(n.score or 0.0, 4)` — `round(numpy.float32, 4)` returns `numpy.float32`, which FastAPI's `jsonable_encoder` cannot serialize. The reranker (`BlendedReranker`) computes blended scores as `float * float32 = float32`. The regular engine path correctly uses `float(round(node.score or 0.0, 4))`. Fix: one-line change in `orchestrator.py:625` — added `float()` wrapper. Server accidentally killed during debugging; needs restart via `launch.bat`.
+
+---
+
+## 2026-03-21 — Eval pipeline data integrity fixes (Codex Dashboard Review 2 — eval launch/tracking/aggregation)
+
+Implemented the full minimal remediation plan from `research_docs/codex_dashboard_review2.md`, which identified the root cause as using a mutable shared JSONL file as both the write path and the state model.
+
+**`evals/run_eval.py`:**
+- `_load_dataset` hardened: catches `json.JSONDecodeError` per line, skips rows without `id`, deduplicates by ID with warnings — used for both dataset loading and result reload before summary.
+- Added `_write_result()` helper with `threading.Lock` + `_written_ids` set seeded from `done_ids`. All writes (sequential, threaded, timeout, exception) now go through this single writer — prevents duplicate rows from concurrent threads or a late-completing worker after timeout.
+- Added `_write_state()` helper (atomic via temp file + `os.replace()`).
+- `state.json` lifecycle: written as `"running"` before eval loop; updated to `"completed"` after summary; updated to `"failed"` on unhandled exception.
+- Summary write made atomic: temp file + `os.replace()`.
+
+**`evals/dashboard.py`:**
+- `_count_jsonl_lines` → `_count_valid_results`: counts unique parsed IDs, not raw lines; progress bar can no longer overflow from duplicate or malformed rows.
+- `_count_valid_dataset_cases`: used at launch to compute `eval_total_cases` from unique valid IDs.
+- Progress polling reads `state.json` `planned_total` (accurate post-filter count) instead of session-state value set before the runner validated the dataset.
+- Orphan run detection: scans `*_state.json` for live `"running"` states with valid PIDs — surfaces cross-session runs; auto-marks dead PIDs as `"crashed"`.
+- `_discover_incomplete_runs()`: `page_eval_results` now shows warnings for failed/crashed runs with a resume hint.
+- `_load_run` / `_load_summary` cache staleness fixed: added `file_mtime` parameter so Streamlit invalidates cache when file changes in place.
+
+---
+
+## 2026-03-21 — Reranker unblocked + eval runs 1–3 + open-ended failure analysis
+
+Unblocked the Phase 1 reranker on Windows by switching from `BAAI/bge-reranker-v2-m3` (SIGSEGV when coloaded with BGE-M3) to `cross-encoder/ms-marco-MiniLM-L-6-v2` (sentence-transformers, no conflict). Installed CPU-only torch to eliminate the `shm.dll` DLL crash. Switched from `FlagEmbeddingReranker` to `SentenceTransformerRerank` in `query_engine.py`.
+
+Ran three eval runs against the 173-case golden dataset:
+- **run_1** (phases 0/2/3, no reranker): Hit@1=78.5%, Judge Correctness=0.782, mean=12.1s
+- **run_2** (+ reranker): Hit@1=79.2% (+0.7pp), Recall@3=82.1%, MRR=0.829, mean=11.0s — **best config**
+- **run_3a/3b** (blended reranker, alpha=0.3/0.6): net neutral vs run_2 at both alphas — reverted
+
+Implemented `BlendedReranker` postprocessor (min-max normalised reranker scores blended with retrieval scores) to fix two rank-flip regressions (case_136 506c>26, case_149 395>392). Score blending at alpha=0.3 fixed case_149 but introduced new regression in case_152; alpha=0.6 fixed case_149 but broke case_109 and case_152. Net: blending was neutral, pure reranker retained.
+
+Conducted deep open-ended failure analysis: article-cited queries score Hit@1=91.0%; open-ended score 63.0%. Identified 15 retrieval failures (6 terminology dilution, 5 concept-in-unexpected-article, 3 niche sub-articles, 2 known hard) and 12 ranking failures (7 adjacent-article confusion, 4 false-friend). Full improvement roadmap added to WORKLOG.
+
+---
+
+## 2026-03-20 — RAG improvement plan: Phases 0, 2, 3 code complete
+
+Implemented all code changes for three of four planned improvement phases. Phase 1 (reranker) is blocked on Windows DLL incompatibility and must be run on Colab/Linux.
+
+**Phase 0 — Error handling hardened:**
+- `api/main.py`: added `except Exception` with `exc_info=True` logging + HTTP 500 with exception type in detail
+- This surfaces the actual crash cause for the 13 hard-failure cases (previously silent 500s)
+
+**Phase 2 — Query understanding:**
+- Extended `_ABBREV_MAP` (+13 terms: STS, SEC-IRBA, SEC-SA, SA, CIU, NPE, TREA, HQLA, PD, CF, SME, IPRE, HVCRE)
+- Added `_SYNONYM_MAP` + `_expand_synonyms()` integrated into `_normalise_query()` (9 legal paraphrases → canonical CRR terms)
+- Added `_enrich_open_ended_query()`: LLM pre-call to predict article hints, appended to open-ended queries
+- Added `_generate_sub_queries()`: breaks multi-hop questions into 2–3 sub-queries
+- `orchestrator.py`: open-ended CRR_SPECIFIC queries enriched; multi-hop queries trigger sub-query generation + `_multi_query_retrieve()` with score-based deduplication
+- `RETRIEVAL_TOP_K` and `RERANK_TOP_N` made env-configurable
+
+**Phase 3 — Synthesis quality:**
+- Hardened `_LEGAL_QA_TEMPLATE` with critical citation rule: cite only articles present verbatim in context; explicit fallback text if article missing from context
+- Raised `_LOW_CONFIDENCE_THRESHOLD` from 0.35 → 0.40
+- Multi-hop queries now route to `HARD_QUERY_MODEL` (gpt-4o) for synthesis
+
+**Tests:** 30 new tests added (19 in `test_query_engine_unit.py`, 11 in `test_orchestrator.py`); 2 stale tests fixed. 341 unit tests total, all green.
+
+---
+
+## 2026-03-20 — Qdrant index diagnosis: all 11 "missing" articles confirmed present
+
+Ran `diagnose_qdrant.py` + direct Qdrant payload scan against the 11 articles suspected of being missing (115, 121, 122, 132a, 132c, 152, 242, 243, 254, 258, 429b). All 11 are in the index with correct node counts. Conclusion: the 13 hard failures are code crashes (unhandled exceptions), not missing data. The new exception handler in `api/main.py` will surface the actual exception type on the next eval run.
+
+---
+
+## 2026-03-20 — Baseline eval run complete + manual case review
+
+Executed the first full eval run against the 173-case golden dataset.
+
+**Baseline results (run name: `baseline`):**
+
+| Metric | Value |
+|--------|-------|
+| Hit@1 | 81.3% |
+| Recall@1 | 77.2% |
+| Recall@5 | 85.3% |
+| MRR | 0.842 |
+| Judge Correctness | 0.774 |
+| Judge Completeness | 0.788 |
+| Judge Faithfulness | 0.799 |
+| Hard failures | 13/173 (7.5%) |
+| P50 latency | 10.5s |
+
+**Key findings:**
+- 13 hard failures (all `status=error`) concentrated in 6 categories: `credit_risk_sa` (5), `securitisation_methods` (3), `ciu_treatment` (2), `significant_risk_transfer` (1), `STS_vs_nonSTS` (1), `leverage_ratio_total_exposure` (1). Expected articles: 115, 121, 122, 132a, 132c, 152, 242, 243, 254, 258, 429b.
+- Reranker OFF — 8% gap between Recall@1 and Recall@5 (reranking opportunity)
+- Open-ended queries: 65.6% Hit@1 vs 90.9% for article-cited
+- Multi-article questions: 27% Recall@1, 49.5% Recall@5
+- 10 cases scored 0.0 Judge Correctness (synthesis failures)
+- `false_friend` type: 77.8% Hit@1 but only 0.500 Judge Correctness
+
+**Manual review**: 42 of 173 cases manually reviewed and approved (tracked in `evals/cases/review_status.json`). Review priorities documented in `evals/cases/review_priorities.md`.
+
+**Files**: `evals/results/baseline_summary.json`, `evals/results/baseline_summary.md`, `evals/results/baseline_cases.jsonl`
+
+---
+
+## 2026-03-20 — Codex Dashboard Review 2: four hang/stall fixes applied
+
+Applied all four fixes from `research_docs/codex_dashboard_review_2.md` targeting the "eval runner stuck at N/50" failure chain.
+
+| # | File | Fix |
+|---|------|-----|
+| 1 | `evals/run_eval.py` | Replaced `as_completed()` + `fut.result(timeout=...)` with a `concurrent.futures.wait(timeout=_fut_timeout, return_when=FIRST_COMPLETED)` polling loop. A hung future is never yielded by `as_completed`, so the old timeout guard was unreachable. New loop detects `done_set=empty` (nothing completed in `_fut_timeout` seconds) and records all remaining futures as timeout errors, then breaks. Pool is now created explicitly (not via context manager) with `shutdown(wait=False)` in `finally` so stuck threads can't block the main process on exit. |
+| 2 | `api/main.py` | Converted `/api/query` from sync `def` to `async def`. Offloads `_orchestrator.query()` via `asyncio.to_thread(...)` wrapped in `asyncio.wait_for(..., timeout=_QUERY_TIMEOUT)`. Returns HTTP 504 on timeout. Prevents FastAPI's sync-worker thread pool from saturating under parallel eval load. `_QUERY_TIMEOUT` defaults to 120 s, overridable via `QUERY_TIMEOUT_SECONDS` env var. |
+| 3 | `src/indexing/bge_m3_sparse.py` | Added `_encode_lock = threading.Lock()` around all `_get_model().encode()` calls in `sparse_doc_fn` and `BGEm3Embedding._get_query_embedding` / `_get_text_embedding` / `_get_text_embeddings`. Serializes CPU encodes so parallel queries don't oversubscribe cores or hit FlagEmbedding re-entrancy issues. |
+| 4 | `evals/run_eval.py` | Fixed `--auto-start-api`: changed `stdout=PIPE, stderr=STDOUT` → `stdout=DEVNULL, stderr=DEVNULL`. An unread pipe buffer fills and blocks the child uvicorn process, appearing as the API freezing. |
+
+---
+
+## 2026-03-20 — LLM-as-judge eval pipeline (`evals/judge.py` + `--judge` flag)
+
+Added automated answer quality scoring to the eval pipeline. New file `evals/judge.py` calls **gpt-4o** (different model from RAG's gpt-4o-mini) with a structured JSON prompt to score each RAG answer on three dimensions (0–1): **correctness** (factual accuracy), **completeness** (coverage of reference key points), **faithfulness** (no hallucinations). Returns `None` on API/parse errors so partial failures don't abort a run. Modified `evals/run_eval.py`: added `--judge` / `--judge-model` CLI flags, split `METRIC_KEYS` into `RETRIEVAL_METRIC_KEYS + JUDGE_METRIC_KEYS`, integrated judge call in `evaluate_case()`, added judge score logging in the scorecard printout, and `judge_enabled: bool` in `build_summary()`. Modified `evals/dashboard.py`: added judge metrics row in scorecard (only shown when non-None), judge columns in breakdown tables, judge scores and rationale in case drill-down inspector, and a "Enable LLM-as-judge" checkbox in the Run Eval panel. Modified `evals/compare.py`: extended `METRIC_KEYS` and `METRIC_LABELS` with judge keys; `print_report()` skips judge rows when both runs have None scores. All graceful-absence patterns confirmed working: `_mean()` already skips `None`, dashboard sections conditionally hidden, compare rows conditionally printed.
+
+---
+
+## 2026-03-19 — `evals/compare.py` + "🔀 Compare Runs" dashboard page
+
+Built `evals/compare.py` — a CLI regression diff tool and importable library. The core `build_comparison(summary_a, summary_b)` function computes per-metric `{a, b, delta}` dicts across overall metrics and all breakdown dimensions (by_category, by_difficulty, by_question_type, by_article_count), flags regressions/improvements at a ±1 pp threshold, and captures latency deltas. CLI: `python -m evals.compare run_A run_B [--output path.json] [--list]`. Added "🔀 Compare Runs" as a third page in `evals/dashboard.py`, importing `build_comparison` from `compare.py`: baseline/candidate selectors in sidebar, regression/improvement banners at top, overall scorecard using `st.metric` with delta values, latency comparison row, per-breakdown tabs with a metric picker and colour-coded delta column (green = improvement, red = regression), and a download button for the comparison JSON. Also corrected the WORKLOG — `evals/dashboard.py` (Streamlit, 2 pages) and `evals/run_eval.py` were already built in a prior session and the WORKLOG had stale ❌ entries for them.
+
+---
+
+## 2026-03-19 — Eval dashboard planning + golden dataset generator
+
+Built `evals/generate_golden_dataset.py` — a fully automated script that extracts articles from Qdrant (no model loading), calls GPT-4.1 to generate Q&A pairs, and writes crash-safe resumable JSONL output. Implemented two passes: Pass 1 (article-anchored, 44 priority articles across 6 categories) and Pass 2 (adversarial, 8 batches targeting multi_hop / false_friend / negative / diluted_embedding failure modes). Full run generated **173 cases** in `evals/cases/golden_dataset.jsonl`. Reorganised eval case storage: existing manual cases moved to `evals/cases/manual_cases/`; `api/main.py` `/api/feedback` endpoint updated to write new feedback to `manual_cases/` instead of the root `cases/` folder. Composed a full GPT dashboard-design prompt grounded in the dataset structure and planned metrics.
+
+---
+
+## 2026-03-18 — QueryOrchestrator: centralised routing, langdetect language detection, post-retrieval fallback
+
+Implemented `src/query/orchestrator.py` — a `QueryOrchestrator` class that sits between `api/main.py` and `QueryEngine` and owns all query classification, routing, and language detection. Fixes three concrete failures: (1) general questions like "What is Basel III?" now trigger a post-retrieval confidence fallback (score < 0.35) that synthesises from general knowledge with a disclaimer instead of returning the unhelpful "context does not contain sufficient information" message; (2) English queries now receive `language="en"` via `langdetect`, eliminating mixed EN/IT sources (Case_003 issue); (3) the `if not history:` guard on the DefinitionsStore fast-path was removed, so follow-up definition questions (e.g. "What about own funds?" after a prior turn) now correctly resolve through Article 4 instead of going to RAG.
+
+**Files changed:** `src/query/orchestrator.py` (new — `QueryOrchestrator`, `ClassificationResult`, `QueryType` enum, `detect_language()`), `api/main.py` (wired orchestrator, simplified endpoints, removed `_detect_language()`), `src/query/query_engine.py` (removed `if not history:` definition fast-path guard), `requirements.txt` (`langdetect>=1.0.9`), `tests/unit/test_orchestrator.py` (new — 38 tests), `tests/unit/test_api_endpoints.py` (updated to mock `_orchestrator.query` instead of `_query_engine.query`). **352 unit tests, 351 green (1 pre-existing failure unrelated to this work).**
+
+---
+
 ## 2026-03-18 — Article 4 DefinitionsStore: fast-path lookup bypassing RAG
 
 Built a `DefinitionsStore` that parses Article 4 of the CRR into a structured JSON index at startup, enabling O(1) definition lookups without touching the RAG pipeline or calling the LLM. Added a Stage 0.5 fast-path in `QueryEngine.query()` and `/api/query/stream` that intercepts definition queries (e.g. "What is the definition of institution?", "Article 4(1)", "Explain Article 4") and returns answers directly from the JSON cache. Article 4 is now also skipped in `_expand_cross_references()`, eliminating the token-overflow / 429-rate-limit errors that occurred when cross-ref expansion pulled the full 129-definition blob into synthesis context. `definitions/definitions_en.json` and `definitions/definitions_it.json` committed to the repo. 36 new unit tests; 315 total, all green.

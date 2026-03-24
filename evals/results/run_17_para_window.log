@@ -1,0 +1,65 @@
+2026-03-24 16:18:32,341  INFO      ============================================================
+2026-03-24 16:18:32,341  INFO      CRR Eval Runner
+2026-03-24 16:18:32,341  INFO        run     : run_17_para_window
+2026-03-24 16:18:32,341  INFO        dataset : evals\cases\golden_dataset.jsonl
+2026-03-24 16:18:32,341  INFO        api     : http://localhost:8080
+2026-03-24 16:18:32,341  INFO        output  : evals\results\run_17_para_window_cases.jsonl
+2026-03-24 16:18:32,341  INFO        workers : 4
+2026-03-24 16:18:32,342  INFO        dry-run : False
+2026-03-24 16:18:32,342  INFO        judge   : False
+2026-03-24 16:18:32,342  INFO        git     : bb2ff7d
+2026-03-24 16:18:32,342  INFO        note    : Paragraph-window reranker: scores articles by best-matching paragraph (not full text). Selective cross-ref expansion from top-2 nodes only. ToC off. Baseline: run_12 Hit@1=78.0%.
+2026-03-24 16:18:32,342  INFO      ============================================================
+2026-03-24 16:18:32,344  INFO      Loaded 173 cases from evals\cases\golden_dataset.jsonl.
+2026-03-24 16:18:32,345  INFO      173 cases to evaluate.
+2026-03-24 16:18:39,439  INFO      Auto-starting API server: C:\Users\polit\OneDrive\Desktop\code\eu-crr-rag\.venv\Scripts\python.exe -m uvicorn api.main:app --host localhost --port 8080
+2026-03-24 16:18:39,464  INFO      Waiting for API to become healthy (up to 120 s)…
+2026-03-24 16:18:46,428  INFO      API healthy — index loaded, 1490 vector store items.
+2026-03-24 16:25:24,544  INFO      ============================================================
+2026-03-24 16:25:24,544  INFO      CRR Eval Runner
+2026-03-24 16:25:24,544  INFO        run     : run_17_para_window
+2026-03-24 16:25:24,545  INFO        dataset : evals\cases\golden_dataset.jsonl
+2026-03-24 16:25:24,545  INFO        api     : http://localhost:8080
+2026-03-24 16:25:24,545  INFO        output  : evals\results\run_17_para_window_cases.jsonl
+2026-03-24 16:25:24,545  INFO        workers : 4
+2026-03-24 16:25:24,545  INFO        dry-run : False
+2026-03-24 16:25:24,545  INFO        judge   : False
+2026-03-24 16:25:24,545  INFO        git     : bb2ff7d
+2026-03-24 16:25:24,545  INFO        note    : Paragraph-window reranker: scores articles by best-matching paragraph (not full text). Selective cross-ref expansion from top-2 nodes only. ToC off. Baseline: run_12 Hit@1=78.0%.
+2026-03-24 16:25:24,545  INFO      ============================================================
+2026-03-24 16:25:24,547  INFO      Loaded 173 cases from evals\cases\golden_dataset.jsonl.
+2026-03-24 16:25:24,550  INFO      Resuming: 113 cases already evaluated, skipping.
+2026-03-24 16:25:24,550  INFO      60 cases to evaluate.
+2026-03-24 16:25:26,699  INFO      API healthy — index loaded, 1490 vector store items.
+2026-03-24 16:31:27,678  INFO      ============================================================
+2026-03-24 16:31:27,678  INFO      CRR Eval Runner
+2026-03-24 16:31:27,679  INFO        run     : run_17_para_window
+2026-03-24 16:31:27,679  INFO        dataset : evals\cases\golden_dataset.jsonl
+2026-03-24 16:31:27,679  INFO        api     : http://localhost:8080
+2026-03-24 16:31:27,679  INFO        output  : evals\results\run_17_para_window_cases.jsonl
+2026-03-24 16:31:27,679  INFO        workers : 1
+2026-03-24 16:31:27,679  INFO        dry-run : False
+2026-03-24 16:31:27,679  INFO        judge   : False
+2026-03-24 16:31:27,679  INFO        git     : bb2ff7d
+2026-03-24 16:31:27,679  INFO        note    : Paragraph-window reranker: scores  articles by best-matching paragraph (not full text). Selective cross-ref expansion from top-2 nodes only. ToC off. Baseline: run_12 Hit@1=78.0%.
+2026-03-24 16:31:27,680  INFO      ============================================================
+2026-03-24 16:31:27,683  INFO      Loaded 173 cases from evals\cases\golden_dataset.jsonl.
+2026-03-24 16:31:27,688  INFO      Resuming: 173 cases already evaluated, skipping.
+2026-03-24 16:31:27,688  INFO      0 cases to evaluate.
+2026-03-24 16:31:29,892  INFO      API healthy — index loaded, 1490 vector store items.
+2026-03-24 16:31:29,999  INFO      
+2026-03-24 16:31:29,999  INFO      ============================================================
+2026-03-24 16:31:29,999  INFO      Run complete: run_17_para_window
+2026-03-24 16:31:29,999  INFO        Cases: 173 ok / 0 failed / 173 total
+2026-03-24 16:31:29,999  INFO        Hit@1:      80.3%
+2026-03-24 16:31:29,999  INFO        Recall@3:   78.9%
+2026-03-24 16:31:29,999  INFO        Recall@5:   82.6%
+2026-03-24 16:31:29,999  INFO        MRR:        0.840
+2026-03-24 16:31:30,000  INFO      
+2026-03-24 16:31:30,000  INFO        --- By citation type ---
+2026-03-24 16:31:30,000  INFO        article_cited  (n=100)  Hit@1=91.0%  Recall@3=85.8%  MRR=0.910
+2026-03-24 16:31:30,000  INFO        open_ended     (n=73)  Hit@1=65.8%  Recall@3=69.4%  MRR=0.744
+2026-03-24 16:31:30,000  INFO      
+2026-03-24 16:31:30,001  INFO        P50 latency: 10126 ms
+2026-03-24 16:31:30,001  INFO        Summary → evals\results\run_17_para_window_summary.json
+2026-03-24 16:31:30,001  INFO      ============================================================

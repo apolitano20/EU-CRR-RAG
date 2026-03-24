@@ -1,0 +1,109 @@
+2026-03-23 15:13:20,130  INFO      ============================================================
+2026-03-23 15:13:20,131  INFO      CRR Eval Runner
+2026-03-23 15:13:20,132  INFO        run     : run_2d_baseline
+2026-03-23 15:13:20,132  INFO        dataset : evals\cases\golden_dataset.jsonl
+2026-03-23 15:13:20,133  INFO        api     : http://localhost:8080
+2026-03-23 15:13:20,133  INFO        output  : evals\results\run_2d_baseline_cases.jsonl
+2026-03-23 15:13:20,134  INFO        workers : 4
+2026-03-23 15:13:20,134  INFO        dry-run : False
+2026-03-23 15:13:20,134  INFO        judge   : False
+2026-03-23 15:13:20,136  INFO        git     : bb2ff7d
+2026-03-23 15:13:20,137  INFO      ============================================================
+2026-03-23 15:13:20,151  INFO      Loaded 173 cases from evals\cases\golden_dataset.jsonl.
+2026-03-23 15:13:20,153  INFO      173 cases to evaluate.
+2026-03-23 15:13:22,353  INFO      API healthy — index loaded, 1490 vector store items.
+2026-03-23 15:41:18,621  INFO      
+2026-03-23 15:41:18,626  INFO      ============================================================
+2026-03-23 15:41:18,627  INFO      Run complete: run_2d_baseline
+2026-03-23 15:41:18,627  INFO        Cases: 159 ok / 14 failed
+2026-03-23 15:41:18,628  INFO        Hit@1:      76.7%
+2026-03-23 15:41:18,631  INFO        Recall@3:   78.9%
+2026-03-23 15:41:18,631  INFO        Recall@5:   81.8%
+2026-03-23 15:41:18,632  INFO        MRR:        0.815
+2026-03-23 15:41:18,632  INFO      
+2026-03-23 15:41:18,632  INFO        --- By citation type ---
+2026-03-23 15:41:18,633  INFO        article_cited  (n=89)  Hit@1=88.8%  Recall@3=84.6%  MRR=0.893
+2026-03-23 15:41:18,633  INFO        open_ended     (n=70)  Hit@1=61.4%  Recall@3=71.5%  MRR=0.715
+2026-03-23 15:41:18,634  INFO      
+2026-03-23 15:41:18,634  INFO        P50 latency: 29227 ms
+2026-03-23 15:41:18,634  INFO        Summary → evals\results\run_2d_baseline_summary.json
+2026-03-23 15:41:18,635  INFO      ============================================================
+2026-03-23 15:47:44,550  INFO      ============================================================
+2026-03-23 15:47:44,551  INFO      CRR Eval Runner
+2026-03-23 15:47:44,552  INFO        run     : run_2d_baseline
+2026-03-23 15:47:44,554  INFO        dataset : evals\cases\golden_dataset.jsonl
+2026-03-23 15:47:44,555  INFO        api     : http://localhost:8080
+2026-03-23 15:47:44,555  INFO        output  : evals\results\run_2d_baseline_cases.jsonl
+2026-03-23 15:47:44,555  INFO        workers : 4
+2026-03-23 15:47:44,556  INFO        dry-run : False
+2026-03-23 15:47:44,556  INFO        judge   : False
+2026-03-23 15:47:44,556  INFO        git     : bb2ff7d
+2026-03-23 15:47:44,557  INFO      ============================================================
+2026-03-23 15:47:44,565  INFO      Loaded 173 cases from evals\cases\golden_dataset.jsonl.
+2026-03-23 15:47:44,586  INFO      Resuming: 173 cases already evaluated, skipping.
+2026-03-23 15:47:44,588  INFO      0 cases to evaluate.
+2026-03-23 15:47:48,694  INFO      Auto-starting API server: C:\Users\polit\OneDrive\Desktop\code\eu-crr-rag\.venv\Scripts\python.exe -m uvicorn api.main:app --host localhost --port 8080
+2026-03-23 15:47:48,728  INFO      Waiting for API to become healthy (up to 120 s)…
+2026-03-23 15:49:45,244  INFO      API healthy — index loaded, 1490 vector store items.
+2026-03-23 15:57:28,796  INFO      ============================================================
+2026-03-23 15:57:28,798  INFO      CRR Eval Runner
+2026-03-23 15:57:28,798  INFO        run     : run_2d_baseline
+2026-03-23 15:57:28,799  INFO        dataset : evals\cases\golden_dataset.jsonl
+2026-03-23 15:57:28,799  INFO        api     : http://localhost:8080
+2026-03-23 15:57:28,799  INFO        output  : evals\results\run_2d_baseline_cases.jsonl
+2026-03-23 15:57:28,799  INFO        workers : 4
+2026-03-23 15:57:28,802  INFO        dry-run : False
+2026-03-23 15:57:28,802  INFO        judge   : False
+2026-03-23 15:57:28,803  INFO        git     : bb2ff7d
+2026-03-23 15:57:28,803  INFO      ============================================================
+2026-03-23 15:57:28,808  INFO      --no-resume: deleted previous results at evals\results\run_2d_baseline_cases.jsonl.
+2026-03-23 15:57:28,825  INFO      Loaded 173 cases from evals\cases\golden_dataset.jsonl.
+2026-03-23 15:57:28,827  INFO      173 cases to evaluate.
+2026-03-23 15:57:31,176  INFO      API healthy — index loaded, 1490 vector store items.
+2026-03-23 16:16:02,962  INFO      
+2026-03-23 16:16:02,969  INFO      ============================================================
+2026-03-23 16:16:02,970  INFO      Run complete: run_2d_baseline
+2026-03-23 16:16:02,972  INFO        Cases: 172 ok / 1 failed
+2026-03-23 16:16:02,974  INFO        Hit@1:      77.3%
+2026-03-23 16:16:02,979  INFO        Recall@3:   79.2%
+2026-03-23 16:16:02,982  INFO        Recall@5:   82.9%
+2026-03-23 16:16:02,983  INFO        MRR:        0.819
+2026-03-23 16:16:02,985  INFO      
+2026-03-23 16:16:02,986  INFO        --- By citation type ---
+2026-03-23 16:16:02,987  INFO        article_cited  (n=100)  Hit@1=90.0%  Recall@3=85.8%  MRR=0.905
+2026-03-23 16:16:02,988  INFO        open_ended     (n=72)  Hit@1=59.7%  Recall@3=70.0%  MRR=0.699
+2026-03-23 16:16:02,990  INFO      
+2026-03-23 16:16:02,992  INFO        P50 latency: 22625 ms
+2026-03-23 16:16:02,993  INFO        Summary → evals\results\run_2d_baseline_summary.json
+2026-03-23 16:16:02,994  INFO      ============================================================
+2026-03-23 17:18:28,595  INFO      ============================================================
+2026-03-23 17:18:28,596  INFO      CRR Eval Runner
+2026-03-23 17:18:28,596  INFO        run     : run_2d_baseline
+2026-03-23 17:18:28,597  INFO        dataset : evals\cases\golden_dataset.jsonl
+2026-03-23 17:18:28,598  INFO        api     : http://localhost:8080
+2026-03-23 17:18:28,598  INFO        output  : evals\results\run_2d_baseline_cases.jsonl
+2026-03-23 17:18:28,598  INFO        workers : 4
+2026-03-23 17:18:28,599  INFO        dry-run : False
+2026-03-23 17:18:28,599  INFO        judge   : False
+2026-03-23 17:18:28,599  INFO        git     : bb2ff7d
+2026-03-23 17:18:28,600  INFO      ============================================================
+2026-03-23 17:18:28,601  INFO      --no-resume: deleted previous results at evals\results\run_2d_baseline_cases.jsonl.
+2026-03-23 17:18:28,604  INFO      Loaded 173 cases from evals\cases\golden_dataset.jsonl.
+2026-03-23 17:18:28,605  INFO      173 cases to evaluate.
+2026-03-23 17:18:30,765  INFO      API healthy — index loaded, 1490 vector store items.
+2026-03-23 17:28:09,031  INFO      
+2026-03-23 17:28:09,036  INFO      ============================================================
+2026-03-23 17:28:09,037  INFO      Run complete: run_2d_baseline
+2026-03-23 17:28:09,041  INFO        Cases: 169 ok / 4 failed
+2026-03-23 17:28:09,042  INFO        Hit@1:      76.9%
+2026-03-23 17:28:09,047  INFO        Recall@3:   79.8%
+2026-03-23 17:28:09,048  INFO        Recall@5:   83.5%
+2026-03-23 17:28:09,052  INFO        MRR:        0.818
+2026-03-23 17:28:09,053  INFO      
+2026-03-23 17:28:09,054  INFO        --- By citation type ---
+2026-03-23 17:28:09,055  INFO        article_cited  (n=98)  Hit@1=89.8%  Recall@3=85.5%  MRR=0.903
+2026-03-23 17:28:09,056  INFO        open_ended     (n=71)  Hit@1=59.2%  Recall@3=72.0%  MRR=0.701
+2026-03-23 17:28:09,057  INFO      
+2026-03-23 17:28:09,059  INFO        P50 latency: 10215 ms
+2026-03-23 17:28:09,064  INFO        Summary → evals\results\run_2d_baseline_summary.json
+2026-03-23 17:28:09,067  INFO      ============================================================

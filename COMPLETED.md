@@ -5,6 +5,44 @@ For open tasks and backlog, see `WORKLOG.md`.
 
 ---
 
+## 2026-03-25 — run_20: Mixed chunking — new SOTA Hit@1=86.7% (+6.4pp vs run_17)
+
+Implemented `USE_MIXED_CHUNKING=true` mode: both ARTICLE and PARAGRAPH chunks compete freely in Qdrant retrieval (no chunk_type filter). A new `ArticleDeduplicatorPostprocessor` (inserted after `SimilarityPostprocessor`, before the reranker) groups nodes by article number and keeps the highest-scored chunk per article, with a 2% margin preference for ARTICLE chunks to avoid unnecessary synthesis round-trips. Any surviving PARAGRAPH chunk is upgraded to its parent ARTICLE text at context assembly time. No re-ingestion required — paragraph chunks were already in the index from run_19's re-ingest.
+
+Results vs run_17 (n=173, no judge): Hit@1 80.3% → **86.7%** (+6.4pp), Recall@1 72.5% → **78.9%** (+6.4pp), Recall@3 78.9% → **83.6%** (+4.7pp), MRR 0.840 → **0.891** (+5.1pp). Zero regressions across all categories. Standout gains: `credit_risk_sa` +60pp, `known_failures` +25pp, `leverage_ratio_cash_pooling` +100pp, `false_friend` +21pp, `procedural` +13pp, medium difficulty +9pp, hard difficulty +9pp. Latency slightly improved (mean 10.5s vs 10.7s). **New SOTA.**
+
+---
+
+## 2026-03-25 — run_19: Para-chunking diagnosis — dual-population retrieval problem identified
+
+Ran full 173-case eval on `USE_PARAGRAPH_CHUNKING=true` (paragraph-only retrieval). Overall Hit@1=70.5% — significant regression vs run_17 (80.3%). Root cause: top-k flooding — long articles with many paragraphs consume multiple slots, displacing other articles. High-volume categories hurt most: liquidity -30pp, own_funds -29pp, large_exposures -14pp. But clear improvements on localized queries: credit_risk_sa +40pp, leverage_ratio_cash_pooling +100pp, known_failures +17pp. Established that the dataset has two populations: ~15-20% localized queries benefiting from paragraph-level precision, ~80-85% broad queries needing article-level context. Led directly to the mixed-chunking solution (run_20).
+
+---
+
+## 2026-03-24 — Windows/Python 3.13 WMI hang fix in api/main.py
+
+After a mid-run API crash, the server would not restart — `import llama_index.core` hung indefinitely. Root cause traced via `faulthandler` stack dump: SQLAlchemy calls `platform.machine()` at import time, which in Python 3.13 on Windows calls `platform._wmi_query()` using WMI COM — this hangs when the WMI service is in a bad state after a crash. Fix: pre-populate `platform._uname_cache` at the top of `api/main.py` (before any llama_index imports) to bypass the WMI call entirely. Guarded to Windows-only with `sys.platform == "win32"`. API now starts reliably.
+
+---
+
+## 2026-03-24 — Eval dashboard: Stop button for running and orphan eval runs
+
+Added an ⏹ Stop button to the `_run_eval_panel()` section of `evals/dashboard.py`. The button appears next to the progress bar in a `[5,1]` column layout for both active runs (launched from current session) and orphan runs (detected from disk state files). Clicking it calls `_kill_eval_proc()` — a new helper that terminates the subprocess, kills by PID from the state file, marks the run as `"stopped"`, and clears session state. Previously there was no way to interrupt a running eval from the dashboard.
+
+---
+
+## 2026-03-24 — Paragraph-level chunking (Codex rank 3): dual-document index implementation
+
+Implemented the full paragraph-level chunking architecture on branch `ingest_contextual_prefix`. Each article now produces 1 ARTICLE doc (for synthesis/cross-ref) + N PARAGRAPH docs (for retrieval) when it has ≥2 numbered `<div class="norm">` paragraphs and body ≥100 words. Changes across 6 files: `document.py` (PARAGRAPH NodeLevel, 3 new fields), `eurlex_ingest.py` (`_process_article_div` returns `list[Document]`, DOM-based para splitting with BeautifulSoup wrapper fix for `_extract_structured_text`), `vector_store.py` (payload indexes for chunk_type/parent_article_id/para_id), `query_engine.py` (PARAGRAPH filter on retriever, parent-ARTICLE fetch in context assembly, chunk_type-aware cross-ref expansion and direct article retrieve, ParagraphWindowReranker auto-fallback to BlendedReranker), `orchestrator.py` (`_build_context` mirrors parent-ARTICLE fetch logic), `test_eurlex_ingest.py` (11 new TestParagraphChunking tests). All 136 unit tests pass. Committed and pushed. Re-ingest on Colab T4 pending.
+
+---
+
+## 2026-03-24 — run_18: Contextual hierarchy prefix in embedding text — neutral vs run_17
+
+Implemented `_build_hierarchy_prefix()` in `src/ingestion/eurlex_ingest.py` to prepend `Part > Title > Chapter > Section > Article N — Title` to every indexed document's `Document.text` (embedding text), while storing the original body as `metadata["display_text"]` for clean citation snippets. Re-ingested the full EN + IT corpus on Colab T4 (1490 items confirmed). Result vs run_17: Hit@1 unchanged (80.3%), Recall@3/5 -1.1pp, MRR -0.005, `ciu_treatment` -20pp, `known_failures` -8.3pp, `capital_ratios`/`own_funds` +3.2pp each. Prefix alone on full-article blobs is insufficient — the structural signal is diluted by long article bodies. run_17 remains the best config. Index retained with prefix (harmless); full gains expected only after paragraph chunking (Codex rank 3). Branch: `ingest_contextual_prefix`.
+
+---
+
 ## 2026-03-24 — run_17: Paragraph-window reranker — new best Hit@1=80.3% (+2.3pp vs run_12)
 
 Implemented `ParagraphWindowReranker` in `src/query/query_engine.py`: instead of scoring full article text against the query, splits each retrieved article into paragraph windows (split on `\n\n`, evenly sampled up to `PARAGRAPH_WINDOW_MAX_WINDOWS=4`) and uses the best window's CrossEncoder score as the article's rerank score. Blends with retrieval score via `RERANK_BLEND_ALPHA`. Stores the best-matching window in `node.metadata["best_paragraph"]` for future display use. Enabled via `USE_PARAGRAPH_WINDOW_RERANKER=true`; replaces `USE_RERANKER` (same model, avoids loading twice). Also shipped: `QDRANT_COLLECTION` env var, Qdrant payload indexes for `part`/`title`/`chapter`/`section`, and selective cross-ref expansion (top-2 nodes only, joint reranking of expanded nodes).

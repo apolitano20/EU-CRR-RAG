@@ -4,13 +4,15 @@ For completed work history, see `COMPLETED.md`.
 
 ---
 
-## Current State (as of 2026-03-24) ✅ CLEAN INDEX — 1490 items (745 EN + 745 IT) | 341 unit tests green (1 pre-existing failure in definitions_store) | case_161 HTTP 500 bug fixed
+## Current State (as of 2026-03-25) ✅ MIXED CHUNKING — run_20 is new SOTA | branch: ingest_contextual_prefix → merging to main
 
-Best eval run: **run_17_para_window** — Hit@1=**80.3%**, Recall@3=78.9%, MRR=0.840, mean latency ~10.7s (no judge). **New best.**
-Best run with judge: **run_2e_baseline** — Hit@1=76.3%, MRR=0.815, Judge Correctness=0.770, Judge Faithfulness=0.790.
-Config: `USE_PARAGRAPH_WINDOW_RERANKER=true`, `PARAGRAPH_WINDOW_MAX_WINDOWS=4`, `cross-encoder/ms-marco-MiniLM-L-6-v2`, top_n=6, `RETRIEVAL_TOP_K=15`, `RETRIEVAL_ALPHA=0.5`, `TITLE_BOOST_WEIGHT=0`, `ADJACENT_TIEBREAK_DELTA=0.05`, `USE_TOC_ROUTING=false`, `gpt-4o-mini` (standard) + `gpt-4o` (multi-hop via orchestrator).
+Best eval run: **run_20_mixed_chunking** — Hit@1=**86.7%**, Recall@3=83.6%, MRR=0.891, mean latency ~10.5s (no judge). **New SOTA.**
+Best run with judge: **run_2e_baseline** — Hit@1=76.3%, MRR=0.815, Judge Correctness=0.770, Judge Faithfulness=0.790. (judge run on run_20 config pending)
+Config: `USE_MIXED_CHUNKING=true`, `USE_PARAGRAPH_WINDOW_RERANKER=true`, `PARAGRAPH_WINDOW_MAX_WINDOWS=4`, `cross-encoder/ms-marco-MiniLM-L-6-v2`, top_n=6, `RETRIEVAL_TOP_K=15`, `RETRIEVAL_ALPHA=0.5`, `TITLE_BOOST_WEIGHT=0`, `ADJACENT_TIEBREAK_DELTA=0.05`, `USE_TOC_ROUTING=false`, `gpt-4o-mini` (standard) + `gpt-4o` (multi-hop via orchestrator).
 
-**Next experiment:** run_18 — judge run on run_17 config to get comparable judge scores vs run_2e baseline.
+**Next experiment candidates:**
+- run_20 judge — enable `--judge` for comparable judge scores vs run_2e baseline (Judge Correctness=0.770).
+- Diluted embedding fix — remaining weak spot (hit@1=0.17 unchanged across all runs). Needs HyDE or alternative approach.
 
 ---
 
@@ -39,6 +41,9 @@ All runs on 173-case golden dataset, judge enabled (gpt-4o).
 | run_15_toc2 | 2026-03-24 | 76.3% | 80.2% | 0.824 | — | Universal ToC routing (parallel, timeout-fixed): regression overall (-1.7pp Hit@1, +30% latency). Gains for multi-article (+9.4pp), false_friend (+7.1pp), diluted_embedding (+37.5pp Recall@3). Losses in liquidity (-7.4pp), own_funds (-6.5pp), threshold (-7.1pp). **Conclusion: selective routing needed.** |
 | run_16_toc_confidence | 2026-03-24 | 77.5% | 79.2% | 0.821 | — | Selective ToC routing (fires when max reranker score < 0.55): still a net regression vs run_12 (-0.5pp). ToC routing retired. |
 | **run_17_para_window** | 2026-03-24 | **80.3%** | 78.9% | **0.840** | — | Paragraph-window reranker: +2.3pp Hit@1 vs run_12. false_friend +14.3pp, open_ended +4.1pp, negative +12.5pp. diluted_embedding -16.7pp (6 cases only). +800ms latency. **Current best.** |
+| run_18_contextual_prefix | 2026-03-24 | 80.3% | 77.8% | 0.835 | — | Contextual hierarchy prefix in embedding text (Codex rank 2). Neutral overall vs run_17. ciu_treatment -20pp, known_failures -8.3pp. capital_ratios +3.2pp, own_funds +3.2pp. +1s latency. Prefix on full-article blobs insufficient — gains gated on paragraph chunking. |
+| run_19_para_chunking | 2026-03-24 | 70.5% | 69.6% | 0.733 | — | Para-chunked dual-doc index, PARAGRAPH-only retrieval. Regression overall — top-k flooding. Gains on localized queries (credit_risk_sa +40pp, cash_pooling +100pp). Led to mixed-chunking insight. |
+| **run_20_mixed_chunking** | 2026-03-25 | **86.7%** | **83.6%** | **0.891** | — | Mixed ARTICLE+PARAGRAPH retrieval + ArticleDeduplicatorPostprocessor. No re-ingest. **New SOTA — beats run_17 by +6.4pp Hit@1, +4.7pp Recall@3, +5.1pp MRR. Zero regressions.** |
 
 Codex Dashboard Review 2 hang fixes applied 2026-03-20: eval runner `as_completed` hang fixed (replaced with `wait()` polling loop + `shutdown(wait=False)`); `/api/query` converted to async with `asyncio.to_thread` + `asyncio.wait_for` (504 on timeout); BGE-M3 `_encode_lock` added to serialize CPU encodes; `--auto-start-api` stdout pipe bug fixed (DEVNULL).
 
@@ -98,7 +103,7 @@ Baseline eval complete (2026-03-20). Full improvement plan in `research_docs/crr
 - Blended reranker tried (alpha=0.3 and 0.6): net neutral vs run_2, reverted to pure reranker
 - Reranker unblocked: switched from `bge-reranker-v2-m3` (SIGSEGV with BGE-M3) to `cross-encoder/ms-marco-MiniLM-L-6-v2` (sentence-transformers, no conflict)
 
-**Target metrics:** Hit@1 ≥ 90%, Judge Correctness ≥ 0.85 — **current gap: Hit@1=78.0% (no judge) / 76.3% (with judge), Judge Correctness=0.770**
+**Target metrics:** Hit@1 ≥ 90%, Judge Correctness ≥ 0.85 — **current gap: Hit@1=86.7% (no judge) / 76.3% (with judge, stale), Judge Correctness=0.770 (stale — judge run on run_20 pending)**
 
 **Next improvement candidates (see open-ended failure analysis below):**
 
@@ -146,11 +151,12 @@ Findings from `codex_review_findings.md` (2026-03-24). All no-re-ingest phases s
 | 3 | Qdrant payload indexes for `part`, `title`, `chapter`, `section` | ✅ Done |
 | 4 | Selective cross-ref expansion (top-2 nodes only, joint reranking) | ✅ Done |
 
-**Remaining (requires re-ingestion — deferred until new cluster is available):**
+**Remaining (requires re-ingestion):**
 
 | # | Phase | What |
 |---|-------|------|
-| 2 | **Contextual embedding text** | Prepend hierarchy prefix to indexed text so retrieval sees `Part > Title > Chapter > Article N - Title`. Targets `procedural` and `diluted_embedding` failures. Requires new Qdrant collection (`eu_crr_v2`). |
+| 2 | **Contextual embedding text** | ✅ **Done (run_18, 2026-03-24)** — implemented + re-ingested. Neutral overall; gains gated on paragraph chunking. Index retained (prefix is harmless). |
+| 3 | **Paragraph/point chunking** | ✅ **Done (2026-03-24)** — implemented on `ingest_contextual_prefix`. Awaiting Colab re-ingest + run_19 eval. |
 
 ---
 

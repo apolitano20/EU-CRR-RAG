@@ -57,6 +57,10 @@ PARAGRAPH_WINDOW_MAX_WINDOWS: int = int(os.getenv("PARAGRAPH_WINDOW_MAX_WINDOWS"
 # When true, the index contains PARAGRAPH-level chunks in addition to ARTICLE docs.
 # Retrieval filters to PARAGRAPH chunks; context assembly fetches the parent ARTICLE docs.
 USE_PARAGRAPH_CHUNKING: bool = os.getenv("USE_PARAGRAPH_CHUNKING", "false").lower() == "true"
+# When true, both ARTICLE and PARAGRAPH chunks compete in retrieval (no chunk_type filter).
+# An ArticleDeduplicatorPostprocessor keeps only the best-scored chunk per article, and
+# context assembly upgrades any winning PARAGRAPH chunk to its parent ARTICLE text.
+USE_MIXED_CHUNKING: bool = os.getenv("USE_MIXED_CHUNKING", "false").lower() == "true"
 _HISTORY_MAX_TURNS = 5
 # When EVAL_MODE=true all internal LLM calls use temperature=0 for reproducibility.
 EVAL_MODE: bool = os.getenv("EVAL_MODE", "false").lower() == "true"
@@ -269,6 +273,82 @@ class AdjacentArticleTiebreakerPostprocessor(BaseNodePostprocessor):
             nodes[0], nodes[1] = nodes[1], nodes[0]
 
         return nodes
+
+
+class ArticleDeduplicatorPostprocessor(BaseNodePostprocessor):
+    """Deduplicate retrieved nodes to at most one chunk per article.
+
+    In mixed-chunking mode both ARTICLE and PARAGRAPH chunks compete in retrieval.
+    Without deduplication, a long article with many paragraphs can flood the top-k
+    and crowd out other articles entirely.
+
+    Strategy per article:
+    - If only ARTICLE or only PARAGRAPH chunks present, keep the highest-scored one.
+    - If both are present and the ARTICLE chunk is within ``_PREFER_ARTICLE_MARGIN``
+      of the best PARAGRAPH chunk, prefer the ARTICLE (avoids a synthesis fetch-parent
+      round-trip and gives the reranker the full article text to score).
+    - Otherwise keep whichever chunk scored highest.
+
+    Context assembly is responsible for upgrading any surviving PARAGRAPH chunk to
+    its parent ARTICLE text before synthesis.
+    """
+
+    # If the ARTICLE chunk score is at most this far below the best PARAGRAPH chunk
+    # score, the ARTICLE chunk wins (prefer full context over marginal score gain).
+    _PREFER_ARTICLE_MARGIN: float = 0.02
+
+    def __init__(self) -> None:
+        super().__init__()
+
+    @classmethod
+    def class_name(cls) -> str:
+        return "ArticleDeduplicatorPostprocessor"
+
+    def _postprocess_nodes(
+        self,
+        nodes: list[NodeWithScore],
+        query_bundle: QueryBundle | None = None,
+    ) -> list[NodeWithScore]:
+        if not nodes:
+            return nodes
+
+        # Group by article number; annexes/non-article nodes keyed by node_id.
+        best_article: dict[str, NodeWithScore] = {}   # ARTICLE chunk winner per key
+        best_para: dict[str, NodeWithScore] = {}      # PARAGRAPH chunk winner per key
+
+        for node in nodes:
+            meta = node.node.metadata
+            article = meta.get("article", "")
+            key = article if article else node.node.node_id
+            chunk_type = meta.get("chunk_type", "ARTICLE")
+
+            if chunk_type == "PARAGRAPH":
+                if key not in best_para or (node.score or 0.0) > (best_para[key].score or 0.0):
+                    best_para[key] = node
+            else:
+                if key not in best_article or (node.score or 0.0) > (best_article[key].score or 0.0):
+                    best_article[key] = node
+
+        all_keys = set(best_article) | set(best_para)
+        result: list[NodeWithScore] = []
+        for key in all_keys:
+            art_node = best_article.get(key)
+            para_node = best_para.get(key)
+
+            if art_node is None:
+                result.append(para_node)  # type: ignore[arg-type]
+            elif para_node is None:
+                result.append(art_node)
+            else:
+                art_score = art_node.score or 0.0
+                para_score = para_node.score or 0.0
+                # Prefer ARTICLE if it's within the margin of the best PARAGRAPH
+                if para_score - art_score <= self._PREFER_ARTICLE_MARGIN:
+                    result.append(art_node)
+                else:
+                    result.append(para_node)
+
+        return sorted(result, key=lambda n: n.score or 0.0, reverse=True)
 
 
 class ParagraphWindowReranker(BaseNodePostprocessor):
@@ -1220,8 +1300,11 @@ class QueryEngine:
 
         # Build article-labelled context string (mirrors stream endpoint)
         context_parts = []
-        if USE_PARAGRAPH_CHUNKING:
-            # PARAGRAPH chunks retrieved — fetch parent ARTICLE docs for full synthesis context.
+        _needs_parent_fetch = USE_PARAGRAPH_CHUNKING or USE_MIXED_CHUNKING
+        if _needs_parent_fetch:
+            # Any PARAGRAPH chunks in results — fetch parent ARTICLE docs for full synthesis context.
+            # Mixed mode: deduplicator already ensured 1 chunk per article; some may be PARAGRAPH.
+            # Paragraph mode: all chunks are PARAGRAPH; always fetch parent.
             # Group by article in score order (first occurrence = best-ranked article).
             article_order: list[str] = []
             _seen_arts: set[str] = set()
@@ -1234,26 +1317,40 @@ class QueryEngine:
                 if art and art not in _seen_arts:
                     _seen_arts.add(art)
                     article_order.append(art)
+                    # In mixed mode: if this node is already an ARTICLE chunk, use it directly
+                    # rather than fetching again (optimisation tracked via chunk_type).
             for art in article_order:
-                fetch_conds: list[tuple[str, str]] = [("article", art), ("chunk_type", "ARTICLE")]
-                if node_language:
-                    fetch_conds.append(("language", node_language))
-                art_nodes = self._fetch_nodes_direct(fetch_conds, top_k=1)
-                if art_nodes:
-                    art_node = art_nodes[0].node
-                    art_title = art_node.metadata.get("article_title", "")
+                # Find the winning chunk for this article in the result set
+                winning_node = next(
+                    (n for n in all_nodes_for_synthesis if n.node.metadata.get("article") == art),
+                    None,
+                )
+                winning_type = (winning_node.node.metadata.get("chunk_type", "") if winning_node else "")
+                if winning_type == "ARTICLE":
+                    # Already have full article text — use directly, skip network fetch
+                    meta = winning_node.node.metadata  # type: ignore[union-attr]
+                    art_title = meta.get("article_title", "")
                     header = f"Article {art}" + (f" — {art_title}" if art_title else "")
-                    content = art_node.metadata.get("display_text") or art_node.get_content()
+                    content = meta.get("display_text") or winning_node.node.get_content()  # type: ignore[union-attr]
                     context_parts.append(f"{header}\n\n{content}")
                 else:
-                    # Fallback: use paragraph chunk text directly if ARTICLE doc not found
-                    for node in all_nodes_for_synthesis:
-                        if node.node.metadata.get("article") == art:
-                            meta = node.node.metadata
+                    fetch_conds: list[tuple[str, str]] = [("article", art), ("chunk_type", "ARTICLE")]
+                    if node_language:
+                        fetch_conds.append(("language", node_language))
+                    art_nodes = self._fetch_nodes_direct(fetch_conds, top_k=1)
+                    if art_nodes:
+                        art_node = art_nodes[0].node
+                        art_title = art_node.metadata.get("article_title", "")
+                        header = f"Article {art}" + (f" — {art_title}" if art_title else "")
+                        content = art_node.metadata.get("display_text") or art_node.get_content()
+                        context_parts.append(f"{header}\n\n{content}")
+                    else:
+                        # Fallback: use paragraph chunk text directly if ARTICLE doc not found
+                        if winning_node is not None:
+                            meta = winning_node.node.metadata
                             art_title = meta.get("article_title", "")
                             header = f"Article {art}" + (f" — {art_title}" if art_title else "")
-                            context_parts.append(f"{header}\n\n{node.node.get_content()}")
-                            break
+                            context_parts.append(f"{header}\n\n{winning_node.node.get_content()}")
         else:
             for node in all_nodes_for_synthesis:
                 meta = node.node.metadata
@@ -1412,7 +1509,9 @@ class QueryEngine:
                 conditions = [("article", ref_art)]
                 if language:
                     conditions.append(("language", language))
-                if USE_PARAGRAPH_CHUNKING:
+                if USE_PARAGRAPH_CHUNKING or USE_MIXED_CHUNKING:
+                    # In paragraph/mixed mode the index holds multiple chunk types per article;
+                    # cross-ref expansion always fetches the full ARTICLE chunk for context.
                     conditions.append(("chunk_type", "ARTICLE"))
                 results = self._fetch_nodes_direct(conditions, top_k=1)
                 expanded.extend(results)
@@ -1601,8 +1700,11 @@ class QueryEngine:
         conditions: list[tuple[str, str]] = [("article", article_num)]
         if language:
             conditions.append(("language", language))
-        if USE_PARAGRAPH_CHUNKING:
+        if USE_PARAGRAPH_CHUNKING and not USE_MIXED_CHUNKING:
             conditions.append(("chunk_type", "PARAGRAPH"))
+        elif not USE_PARAGRAPH_CHUNKING:
+            # Default and mixed modes: fetch the ARTICLE chunk for full context
+            conditions.append(("chunk_type", "ARTICLE"))
         return self._fetch_nodes_direct(conditions, top_k=50)
 
     # ------------------------------------------------------------------
@@ -1760,16 +1862,24 @@ class QueryEngine:
         vector_index: VectorStoreIndex,
         language_filter: Optional[str] = None,
     ) -> RetrieverQueryEngine:
-        # Optional metadata filters: language + chunk_type (when paragraph chunking is active)
+        # Optional metadata filters: language + chunk_type
+        # Mixed mode: no chunk_type filter — ARTICLE and PARAGRAPH chunks compete freely.
+        # Paragraph mode: filter to PARAGRAPH only; article text is fetched at synthesis time.
+        # Default mode: filter to ARTICLE only; paragraph chunks are ignored.
         filter_list = []
         if language_filter:
             filter_list.append(
                 MetadataFilter(key="language", value=language_filter, operator=FilterOperator.EQ)
             )
-        if USE_PARAGRAPH_CHUNKING:
+        if USE_PARAGRAPH_CHUNKING and not USE_MIXED_CHUNKING:
             filter_list.append(
                 MetadataFilter(key="chunk_type", value="PARAGRAPH", operator=FilterOperator.EQ)
             )
+        elif not USE_PARAGRAPH_CHUNKING and not USE_MIXED_CHUNKING:
+            filter_list.append(
+                MetadataFilter(key="chunk_type", value="ARTICLE", operator=FilterOperator.EQ)
+            )
+        # USE_MIXED_CHUNKING=true: no chunk_type filter added
         filters = MetadataFilters(filters=filter_list) if filter_list else None
 
         # Articles are self-contained units — no AutoMergingRetriever needed
@@ -1785,11 +1895,15 @@ class QueryEngine:
             verbose=False,
         )
 
-        # Postprocessors: similarity filter → reranker → title boost (if enabled) → tiebreaker (if enabled)
+        # Postprocessors: similarity filter → [deduplicator] → reranker → title boost → tiebreaker
+        # ArticleDeduplicatorPostprocessor is inserted in mixed-chunking mode to ensure at most
+        # one chunk per article enters the reranker, preventing flooding of the top-k.
         # ParagraphWindowReranker takes precedence over the standard reranker when both are enabled.
         # When title boost is active and no paragraph reranker, the reranker is widened to
         # pass_through (top_n=RETRIEVAL_TOP_K) so that title boost makes the final truncation.
         postprocessors = [SimilarityPostprocessor(similarity_cutoff=SIMILARITY_CUTOFF)]
+        if USE_MIXED_CHUNKING:
+            postprocessors.append(ArticleDeduplicatorPostprocessor())
         para_reranker = getattr(self, "_para_reranker", None)
         title_booster = getattr(self, "_title_booster", None)
         tiebreaker = getattr(self, "_tiebreaker", None)

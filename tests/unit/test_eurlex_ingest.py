@@ -662,6 +662,135 @@ class TestAmendmentBlockParsing:
 
 
 # ---------------------------------------------------------------------------
+# Paragraph-level chunking
+# ---------------------------------------------------------------------------
+
+def _make_multi_para_html(num_paragraphs: int = 3, article_num: str = "92",
+                           article_title: str = "Own funds requirements") -> str:
+    """Build an article HTML with `num_paragraphs` numbered <div class="norm"> paragraphs.
+
+    Each paragraph contains enough words so that the combined body exceeds the
+    _MIN_CHUNK_WORDS=100 threshold when num_paragraphs >= 2.
+    """
+    # ~60 words per paragraph so 2 paragraphs already exceed _MIN_CHUNK_WORDS=100
+    _PARA_BODY = (
+        "which sets out the requirements that institutions shall comply with at all times "
+        "in accordance with this Regulation and any delegated acts or regulatory technical "
+        "standards adopted thereunder by the Commission on the basis of a mandate conferred "
+        "upon it by this Regulation."
+    )
+    paras = "".join(
+        f'<div class="norm"><span class="no-parag">{i}.</span>'
+        f'This is numbered paragraph {i} of Article {article_num} {_PARA_BODY}</div>\n'
+        for i in range(1, num_paragraphs + 1)
+    )
+    title_html = f'<div class="eli-title"><p class="stitle-article-norm">{article_title}</p></div>'
+    return f"""<!DOCTYPE html><html><body>
+    <div id="prt_THREE.tis_I.cpt_1">
+      <div id="art_{article_num}">
+        <p class="title-article-norm">Article {article_num}</p>
+        {title_html}
+        {paras}
+      </div>
+    </div>
+    </body></html>"""
+
+
+@pytest.mark.unit
+class TestParagraphChunking:
+    """Dual-document index: multi-paragraph articles produce ARTICLE + PARAGRAPH docs."""
+
+    def test_multi_para_article_produces_article_plus_paragraph_docs(self):
+        """3-paragraph article → 1 ARTICLE doc + 3 PARAGRAPH docs = 4 total."""
+        html = _make_multi_para_html(num_paragraphs=3)
+        docs = ingester("en")._parse_with_beautifulsoup(html)
+        article_docs = [d for d in docs if d.metadata.get("chunk_type") == "ARTICLE"]
+        para_docs = [d for d in docs if d.metadata.get("chunk_type") == "PARAGRAPH"]
+        assert len(article_docs) == 1
+        assert len(para_docs) == 3
+        assert len(docs) == 4
+
+    def test_single_para_article_produces_only_article_doc(self):
+        """Single-paragraph article → only 1 ARTICLE doc, no PARAGRAPH docs."""
+        html = _make_multi_para_html(num_paragraphs=1)
+        docs = ingester("en")._parse_with_beautifulsoup(html)
+        assert len(docs) == 1
+        assert docs[0].metadata["chunk_type"] == "ARTICLE"
+
+    def test_article_doc_chunk_type_is_article(self):
+        html = _make_multi_para_html(num_paragraphs=2)
+        docs = ingester("en")._parse_with_beautifulsoup(html)
+        article_doc = next(d for d in docs if d.metadata.get("chunk_type") == "ARTICLE")
+        assert article_doc.metadata["chunk_type"] == "ARTICLE"
+
+    def test_paragraph_doc_chunk_type_is_paragraph(self):
+        html = _make_multi_para_html(num_paragraphs=2)
+        docs = ingester("en")._parse_with_beautifulsoup(html)
+        para_docs = [d for d in docs if d.metadata.get("chunk_type") == "PARAGRAPH"]
+        assert len(para_docs) == 2
+        for doc in para_docs:
+            assert doc.metadata["chunk_type"] == "PARAGRAPH"
+
+    def test_paragraph_doc_has_parent_article_id(self):
+        html = _make_multi_para_html(num_paragraphs=2, article_num="92")
+        docs = ingester("en")._parse_with_beautifulsoup(html)
+        para_docs = [d for d in docs if d.metadata.get("chunk_type") == "PARAGRAPH"]
+        for doc in para_docs:
+            assert doc.metadata.get("parent_article_id") == "art_92_en"
+
+    def test_paragraph_doc_has_para_id(self):
+        html = _make_multi_para_html(num_paragraphs=3)
+        docs = ingester("en")._parse_with_beautifulsoup(html)
+        para_docs = sorted(
+            [d for d in docs if d.metadata.get("chunk_type") == "PARAGRAPH"],
+            key=lambda d: int(d.metadata["para_id"])
+        )
+        assert [d.metadata["para_id"] for d in para_docs] == ["1", "2", "3"]
+
+    def test_paragraph_doc_inherits_article_metadata(self):
+        html = _make_multi_para_html(num_paragraphs=2, article_num="92")
+        docs = ingester("en")._parse_with_beautifulsoup(html)
+        para_docs = [d for d in docs if d.metadata.get("chunk_type") == "PARAGRAPH"]
+        for doc in para_docs:
+            assert doc.metadata.get("article") == "92"
+            assert doc.metadata.get("language") == "en"
+            assert doc.metadata.get("part") == "THREE"
+
+    def test_paragraph_embedding_text_has_hierarchy_prefix(self):
+        html = _make_multi_para_html(num_paragraphs=2, article_num="92")
+        docs = ingester("en")._parse_with_beautifulsoup(html)
+        para_docs = [d for d in docs if d.metadata.get("chunk_type") == "PARAGRAPH"]
+        for doc in para_docs:
+            assert "Article 92" in doc.text.split("\n")[0]
+
+    def test_paragraph_embedding_text_has_para_label(self):
+        """Paragraph embedding text must include 'Paragraph N' label."""
+        html = _make_multi_para_html(num_paragraphs=2, article_num="92")
+        docs = ingester("en")._parse_with_beautifulsoup(html)
+        para_docs = sorted(
+            [d for d in docs if d.metadata.get("chunk_type") == "PARAGRAPH"],
+            key=lambda d: int(d.metadata["para_id"])
+        )
+        assert "Paragraph 1" in para_docs[0].text
+        assert "Paragraph 2" in para_docs[1].text
+
+    def test_article_doc_chunk_type_absent_from_paragraph_node_ids(self):
+        """ARTICLE doc node_id and PARAGRAPH doc node_ids must be distinct."""
+        html = _make_multi_para_html(num_paragraphs=2, article_num="92")
+        docs = ingester("en")._parse_with_beautifulsoup(html)
+        node_ids = [d.metadata.get("node_id") for d in docs]
+        assert len(node_ids) == len(set(node_ids)), "All node_ids must be unique"
+
+    def test_article_doc_has_display_text(self):
+        """ARTICLE doc must have display_text stored in metadata (body without prefix)."""
+        html = _make_multi_para_html(num_paragraphs=2)
+        docs = ingester("en")._parse_with_beautifulsoup(html)
+        article_doc = next(d for d in docs if d.metadata.get("chunk_type") == "ARTICLE")
+        assert "display_text" in article_doc.metadata
+        assert not article_doc.metadata["display_text"].startswith("Part ")
+
+
+# ---------------------------------------------------------------------------
 # _download_html with local file
 # ---------------------------------------------------------------------------
 

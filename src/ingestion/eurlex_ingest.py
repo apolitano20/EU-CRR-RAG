@@ -213,11 +213,12 @@ class EurLexIngester:
 
         documents: list[Document] = []
 
-        # Process articles: each <div id="art_N"> is one Document
+        # Process articles: each <div id="art_N"> yields 1+ Documents
         for art_div in soup.find_all("div", id=re.compile(r"^art_[^.]+$")):
-            doc = self._process_article_div(art_div)
-            if doc and doc.text.strip():
-                documents.append(doc)
+            docs = self._process_article_div(art_div)
+            for doc in docs:
+                if doc.text.strip():
+                    documents.append(doc)
 
         # Process annexes: each top-level <div id="anx_X"> is one Document.
         # Exclude sub-annex IDs like anx_IV.1 (contain a dot) to avoid duplicates.
@@ -251,8 +252,17 @@ class EurLexIngester:
     # Article processing
     # ------------------------------------------------------------------
 
-    def _process_article_div(self, art_div) -> Optional[Document]:
-        """Convert a single <div id="art_N"> into a LlamaIndex Document."""
+    # Minimum body word count for an article to qualify for paragraph chunking.
+    # Articles shorter than this are indexed as a single ARTICLE doc only.
+    _MIN_CHUNK_WORDS: int = 100
+
+    def _process_article_div(self, art_div) -> list[Document]:
+        """Convert a single <div id="art_N"> into 1+ LlamaIndex Documents.
+
+        Always produces one ARTICLE-level Document (full text, for synthesis context).
+        For articles with 2+ numbered paragraphs and body >= _MIN_CHUNK_WORDS words,
+        also produces one PARAGRAPH-level Document per <div class="norm"> paragraph.
+        """
         div_id = art_div.get("id", "")
         article_num = div_id[4:]  # strip "art_"
 
@@ -271,7 +281,6 @@ class EurLexIngester:
             if stitle:
                 article_title = stitle.get_text(" ", strip=True)
             else:
-                # Fallback: first <p> that isn't the article-number heading
                 for p in eli_title.find_all("p"):
                     if "title-article-norm" not in (p.get("class") or []):
                         candidate = p.get_text(" ", strip=True)
@@ -281,7 +290,6 @@ class EurLexIngester:
 
         formula_images: list[str] = []
         text = self._extract_structured_text(art_div, formula_images=formula_images)
-        # Clean EUR-Lex amendment markers (▼, ◄, ►)
         text = re.sub(r"[▼◄►]\s*\w*", "", text).strip()
 
         has_table = bool(art_div.find("table"))
@@ -292,8 +300,19 @@ class EurLexIngester:
 
         ref_articles, ref_external, ref_annexes = self._extract_cross_references(text)
 
-        node = DocumentNode(
-            node_id=f"art_{article_num}_{self.language}",
+        prefix = _build_hierarchy_prefix(
+            part=hierarchy.get("part"),
+            title=hierarchy.get("title"),
+            chapter=hierarchy.get("chapter"),
+            section=hierarchy.get("section"),
+            article=article_num,
+            article_title=article_title or None,
+        )
+
+        # --- ARTICLE-level document (always produced) ---
+        article_node_id = f"art_{article_num}_{self.language}"
+        article_node = DocumentNode(
+            node_id=article_node_id,
             level=NodeLevel.ARTICLE,
             text=text,
             part=hierarchy.get("part"),
@@ -307,22 +326,78 @@ class EurLexIngester:
             referenced_annexes=ref_annexes,
             has_table=has_table,
             has_formula=has_formula,
+            chunk_type="ARTICLE",
         )
-        meta = node.to_metadata()
-        meta["language"] = self.language
-        meta["display_text"] = text
+        article_meta = article_node.to_metadata()
+        article_meta["language"] = self.language
+        article_meta["display_text"] = text
+        article_embedding_text = f"{prefix}\n\n{text}" if prefix else text
 
-        prefix = _build_hierarchy_prefix(
-            part=hierarchy.get("part"),
-            title=hierarchy.get("title"),
-            chapter=hierarchy.get("chapter"),
-            section=hierarchy.get("section"),
-            article=article_num,
-            article_title=article_title or None,
-        )
-        embedding_text = f"{prefix}\n\n{text}" if prefix else text
+        results: list[Document] = [
+            Document(
+                text=article_embedding_text,
+                metadata=article_meta,
+                id_=_node_id_to_uuid(article_node_id),
+            )
+        ]
 
-        return Document(text=embedding_text, metadata=meta, id_=_node_id_to_uuid(node.node_id))
+        # --- PARAGRAPH-level documents (produced when article qualifies for chunking) ---
+        norm_divs = art_div.find_all("div", class_="norm", recursive=True)
+        # Only keep norm divs that have a numbered paragraph span (no-parag) —
+        # these are the top-level numbered paragraphs (1., 2., …), not wrapper divs.
+        para_divs = [d for d in norm_divs if d.find("span", class_="no-parag", recursive=False)]
+        body_word_count = len(text.split())
+
+        if len(para_divs) >= 2 and body_word_count >= self._MIN_CHUNK_WORDS:
+            for para_div in para_divs:
+                # _extract_structured_text walks container.children and emits text when it
+                # encounters a norm div.  Calling it on the norm div itself would walk
+                # *inside* the div without triggering the norm-div handler, yielding empty
+                # output.  Wrapping the div in a temporary parent fixes this.
+                from bs4 import BeautifulSoup as _BS
+                _wrapper = _BS(f"<div>{para_div}</div>", "html.parser").find("div")
+                para_text = self._extract_structured_text(_wrapper)
+                para_text = re.sub(r"[▼◄►]\s*\w*", "", para_text).strip()
+                if not para_text:
+                    continue
+                # Extract the paragraph number from the no-parag span (e.g. "1.")
+                span = para_div.find("span", class_="no-parag", recursive=False)
+                para_num = span.get_text(strip=True).rstrip(".") if span else str(para_divs.index(para_div) + 1)
+
+                para_node_id = f"art_{article_num}_p{para_num}_{self.language}"
+                para_node = DocumentNode(
+                    node_id=para_node_id,
+                    level=NodeLevel.PARAGRAPH,
+                    text=para_text,
+                    part=hierarchy.get("part"),
+                    title=hierarchy.get("title"),
+                    chapter=hierarchy.get("chapter"),
+                    section=hierarchy.get("section"),
+                    article=article_num,
+                    article_title=article_title or None,
+                    referenced_articles=ref_articles,
+                    referenced_external=ref_external,
+                    referenced_annexes=ref_annexes,
+                    has_table=bool(para_div.find("table")),
+                    has_formula=bool(para_div.find("img", src=re.compile(r"^data:image"))),
+                    chunk_type="PARAGRAPH",
+                    parent_article_id=article_node_id,
+                    para_id=para_num,
+                )
+                para_meta = para_node.to_metadata()
+                para_meta["language"] = self.language
+                para_meta["display_text"] = para_text
+
+                para_embedding_text = f"{prefix}\nParagraph {para_num}\n\n{para_text}"
+                results.append(
+                    Document(
+                        text=para_embedding_text,
+                        metadata=para_meta,
+                        id_=_node_id_to_uuid(para_node_id),
+                    )
+                )
+
+        return results
 
     # ------------------------------------------------------------------
     # Annex processing

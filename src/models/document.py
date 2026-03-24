@@ -11,6 +11,7 @@ class NodeLevel(str, Enum):
     CHAPTER = "CHAPTER"
     SECTION = "SECTION"
     ARTICLE = "ARTICLE"
+    PARAGRAPH = "PARAGRAPH"
     ANNEX = "ANNEX"
 
 
@@ -32,6 +33,10 @@ class DocumentNode:
     referenced_annexes: str = ""              # comma-separated Roman numeral IDs, e.g. "I,III"
     has_table: bool = False
     has_formula: bool = False
+    # Paragraph-chunking fields (populated for PARAGRAPH-level nodes only)
+    chunk_type: str = "ARTICLE"               # "ARTICLE" or "PARAGRAPH"
+    parent_article_id: Optional[str] = None   # e.g. "art_92_en" for PARAGRAPH nodes
+    para_id: Optional[str] = None             # "1", "2", … for PARAGRAPH nodes
     metadata: dict = field(default_factory=dict)
 
     def to_metadata(self) -> dict:
@@ -52,6 +57,9 @@ class DocumentNode:
             "referenced_annexes": self.referenced_annexes,
             "has_table": self.has_table,
             "has_formula": self.has_formula,
+            "chunk_type": self.chunk_type,
+            "parent_article_id": self.parent_article_id or "",
+            "para_id": self.para_id or "",
             **self.metadata,
         }
 

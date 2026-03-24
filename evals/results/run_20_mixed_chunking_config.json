@@ -1,0 +1,36 @@
+{
+  "run_name": "run_20_mixed_chunking",
+  "run_timestamp": "20260324T232938Z",
+  "description": "Mixed retrieval: ARTICLE + PARAGRAPH chunks compete with no chunk_type filter.  ArticleDeduplicatorPostprocessor keeps the best-scored chunk per article (ARTICLE preferred within 2% margin), preventing top-k flooding. Winning PARAGRAPH chunks   upgraded to parent ARTICLE text at synthesis. ParagraphWindowReranker active.  Hypothesis: recovers run_17 performance on broad categories (liquidity, own_funds,      large_exposures) while preserving run_19 gains on localized/threshold cases.",
+  "git_commit": "e2308bf",
+  "eval": {
+    "dataset_path": "evals\\cases\\golden_dataset.jsonl",
+    "api_url": "http://localhost:8080",
+    "workers": 4,
+    "limit": null,
+    "case_ids": null,
+    "judge_enabled": false,
+    "judge_model": null
+  },
+  "retrieval": {
+    "top_k": 15,
+    "alpha": 0.5,
+    "similarity_cutoff": 0.3,
+    "use_reranker": false,
+    "reranker_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+    "rerank_top_n": 6,
+    "rerank_blend_alpha": 0.3,
+    "title_boost_weight": 0.0,
+    "adjacent_tiebreak_delta": 0.05
+  },
+  "synthesis": {
+    "llm_model": "gpt-4o-mini",
+    "hard_query_model": "gpt-4o",
+    "max_context_chars": 100000
+  },
+  "query_pipeline": {
+    "use_hyde": false,
+    "use_toc_routing": false,
+    "use_query_enrichment": true
+  }
+}

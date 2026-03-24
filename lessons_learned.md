@@ -2,6 +2,62 @@
 
 ---
 
+## [2026-03-25] Mixed retrieval beats pure paragraph retrieval — deduplication is the key
+
+**Context:** run_19 used PARAGRAPH-only retrieval and regressed badly overall (-9.8pp Hit@1 vs run_17) despite clear improvements on localized queries. The hypothesis was that finer chunks would improve precision.
+**What happened / insight:** The failure mode was top-k flooding: articles with many paragraphs (e.g. liquidity, own_funds, large_exposures) consumed multiple top-k slots with closely-scored paragraph variants, crowding out other articles entirely. Switching to mixed mode (no chunk_type filter) and adding `ArticleDeduplicatorPostprocessor` — keeping only the best-scored chunk per article — eliminated flooding while preserving the paragraph-level precision signal for localized queries. The deduplicator uses a 2% margin to prefer ARTICLE chunks when scores are near-tied (avoiding unnecessary synthesis fetch round-trips). Result: run_20 beat run_17 by +6.4pp Hit@1 with zero regressions.
+**Take-away:** When indexing multiple granularities of the same document, never retrieve across granularities without per-document deduplication. The right pattern is: retrieve mixed → deduplicate to one chunk per document → upgrade to full document text at synthesis. The paragraph chunks act as precision signals in the ranking race, not as the final synthesis unit.
+
+---
+
+## [2026-03-25] Two-population insight: ~15% localized queries need paragraphs, ~85% need full articles
+
+**Context:** Analysing the category-level wins and losses between run_17 (article-only), run_19 (paragraph-only), and run_20 (mixed).
+**What happened / insight:** The dataset splits into two populations. Localized queries (specific threshold, formula, or named sub-paragraph) benefit from paragraph-level retrieval because the relevant paragraph's dense vector outcompetes the full article blob. Broad queries (regulatory concepts, multi-hop, open-ended) need article-level context — paragraph chunks produce the correct ranking signal but the synthesis must still see the full article. The mixed mode with deduplication serves both: paragraph chunks can win the retrieval race for localized queries (signalling the right article with higher confidence), while article chunks remain competitive for broad queries.
+**Take-away:** When experiments show some categories improve dramatically while others regress by similar magnitude, suspect a two-population problem rather than a single bad hyperparameter. Design a solution that routes or adapts per query rather than choosing one granularity globally.
+
+---
+
+## [2026-03-24] Windows/Python 3.13: `platform._wmi_query()` hangs after a crash — pre-populate the uname cache
+
+**Context:** After the API server crashed mid eval-run, `python -m uvicorn api.main:app` would start the reloader but the worker never came up. `import llama_index.core` hung indefinitely in every diagnostic test.
+**What happened / insight:** SQLAlchemy (`sqlalchemy/util/compat.py`) calls `platform.machine()` at import time. In Python 3.13 on Windows, `platform.machine()` → `platform.uname()` → `platform._wmi_query()`, which queries WMI (Windows Management Instrumentation) via COM. When WMI is in a bad state after a hard crash, this call blocks forever — no timeout. This silently kills every Python process that imports SQLAlchemy (which includes all of llama_index). Traced using `faulthandler.dump_traceback()` fired from a watchdog thread. Fix: at the very top of `api/main.py` (before any llama_index imports), pre-populate `platform._uname_cache` via `platform.uname_result.__new__(...)`. Guarded to `sys.platform == "win32"` only.
+**Take-away:** If the API or any Python process hangs silently on startup after a crash on Windows/Python 3.13, suspect the WMI hang before anything else. The `platform._uname_cache` workaround is already in `api/main.py`. If the issue reappears in other entry points (e.g. ingest scripts), apply the same guard at the top of those files.
+
+---
+
+## [2026-03-24] Sequential timeout block in eval results = server crash, not query difficulty
+
+**Context:** run_19 reported 85/173 failures (49%). The failures looked distributed across categories.
+**What happened / insight:** The failed cases were cases 089–173 — a perfectly sequential block. All cases up to 088 succeeded; every case from 089 onwards timed out at 150s. This pattern unambiguously indicates the API server crashed or became unresponsive mid-run, not that those queries were harder or slower. The per-case timeout error message ("Future timed out after 150s") and the absence of any response in the logs confirmed it. The actual retrieval metrics on the 88 completed cases (MRR 0.742, Hit@1 72.7%) were perfectly healthy.
+**Take-away:** When analysing eval failures, check case IDs first: a contiguous sequential block of failures starting from case N = server crash at that point. Scattered failures = genuine per-query errors (timeout, API error, parsing failure). Never assume a high failure rate means the config is broken without checking the failure ID pattern.
+
+---
+
+## [2026-03-24] `_extract_structured_text` must be called on a parent container, not on a norm div directly
+
+**Context:** Implementing paragraph-level chunking — calling `_extract_structured_text(para_div)` for each `<div class="norm">` paragraph to extract its text for the PARAGRAPH embedding document.
+**What happened / insight:** `_extract_structured_text` walks `container.children` and emits text when it encounters a `div.norm` element as a child. When called on the norm div itself, it walks inside the div and never triggers the norm-div handler — the function returns empty string for every paragraph. This was discovered only at test time; the ingest code ran silently, producing PARAGRAPH docs with empty text that were filtered out by `if doc.text.strip()`. Fix: wrap the norm div in a throwaway parent before calling the function: `_BS(f"<div>{para_div}</div>", "html.parser").find("div")`.
+**Take-away:** `_extract_structured_text` is designed for article/annex containers, not for individual structural elements. Always wrap a single norm div in a parent div before passing it. When adding new call sites for this function, verify it produces non-empty output on a representative fixture rather than relying on it silently discarding the content.
+
+---
+
+## [2026-03-24] Contextual prefix on full-article blobs doesn't move retrieval metrics — gains are gated on chunking
+
+**Context:** Implemented Codex rank-2 recommendation: prepend hierarchy breadcrumb (`Part > Title > Chapter > Article N — Title`) to every document's embedding text before re-ingesting.
+**What happened / insight:** Overall Hit@1 was flat vs run_17, with regressions in `ciu_treatment` (-20pp) and `known_failures` (-8.3pp). The issue is that a 5-word prefix has negligible weight against a 500–1500 word article body in the embedding space. The paragraph-window reranker also shifts score distributions in ways that interact unpredictably with the prefix. The prefix hypothesis is sound — the information is now in the index — but the benefit only materialises when the indexed unit is a single paragraph (where the prefix is a significant fraction of the text), not a full article.
+**Take-away:** Structural context prefixes are most effective on short chunks (paragraphs/points), not on long documents. When evaluating Codex rank-2 (prefix) and rank-3 (chunking) as separate experiments, expect rank-2 alone to be neutral and the real gain to come from rank-3. The two changes are synergistic — do them together in the next re-ingest cycle rather than sequentially.
+
+---
+
+## [2026-03-24] Qdrant _node_content field stores JSON, not raw text — parse before inspecting
+
+**Context:** Writing validation code to confirm the contextual prefix landed in the Qdrant index after re-ingest.
+**What happened / insight:** `payload["_node_content"]` contains a JSON string (`{"id_": ..., "metadata": {...}, "text": "..."}`) — it is LlamaIndex's full node serialization, not the raw document text. Checking `payload["_node_content"].startswith("Part")` always fails. The actual text is at `json.loads(payload["_node_content"])["text"]`.
+**Take-away:** When spot-checking Qdrant payloads for text content, always do `json.loads(payload["_node_content"])["text"]`. Do not treat `_node_content` as a plain text field. The `display_text`, `article`, `language` etc. are stored as top-level payload keys and can be accessed directly.
+
+---
+
 ## [2026-03-24] Paragraph-window reranker: scoring by best paragraph fixes false_friend but hurts diluted_embedding
 
 **Context:** Implementing `ParagraphWindowReranker` based on the codex architectural review, which predicted that scoring whole articles was the main ranking bottleneck.

@@ -11,7 +11,7 @@ from typing import Optional
 
 from llama_index.core import Document, Settings, StorageContext, VectorStoreIndex
 
-from src.indexing.bge_m3_sparse import BGEm3Embedding
+from src.indexing.embed_factory import get_embed_config
 from src.indexing.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -113,7 +113,7 @@ class HierarchicalIndexer:
     # ------------------------------------------------------------------
 
     def _configure_settings(self) -> None:
-        Settings.embed_model = BGEm3Embedding()
+        Settings.embed_model = get_embed_config().embed_model
         Settings.llm = None  # LLM is set per-query in QueryEngine
         # Prevent LlamaIndex from chunking article-level documents.
         # IMPORTANT: `transformations=[]` passed to from_documents() is falsy in Python,

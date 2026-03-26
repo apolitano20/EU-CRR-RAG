@@ -30,7 +30,7 @@ from llama_index.core.vector_stores.types import (
 )
 from llama_index.llms.openai import OpenAI
 
-from src.indexing.bge_m3_sparse import BGEm3Embedding
+from src.indexing.embed_factory import get_embed_config
 from src.indexing.index_builder import HierarchicalIndexer
 from src.indexing.vector_store import VectorStore
 
@@ -2109,7 +2109,12 @@ class QueryEngine:
         HYBRID is kept as a fallback so semantically-loose queries still benefit
         from sparse recall if DEFAULT unexpectedly returns nothing.
         """
-        for mode in (VectorStoreQueryMode.DEFAULT, VectorStoreQueryMode.HYBRID):
+        _modes = (
+            (VectorStoreQueryMode.DEFAULT, VectorStoreQueryMode.HYBRID)
+            if get_embed_config().enable_hybrid
+            else (VectorStoreQueryMode.DEFAULT,)
+        )
+        for mode in _modes:
             try:
                 retriever = self._vector_index.as_retriever(
                     similarity_top_k=top_k,
@@ -2128,7 +2133,7 @@ class QueryEngine:
         return []
 
     def _configure_settings(self) -> None:
-        Settings.embed_model = BGEm3Embedding()
+        Settings.embed_model = get_embed_config().embed_model
         Settings.llm = OpenAI(model=self.llm_model, api_key=self.openai_api_key, timeout=120.0)
         # Invalidate any stale PromptHelper that was cached by a prior code path
         # (e.g. the indexer sets Settings.llm = None which creates a small context window).
@@ -2161,9 +2166,14 @@ class QueryEngine:
         filters = MetadataFilters(filters=filter_list) if filter_list else None
 
         # Articles are self-contained units — no AutoMergingRetriever needed
+        _embed_cfg = get_embed_config()
         vector_retriever = vector_index.as_retriever(
             similarity_top_k=RETRIEVAL_TOP_K,
-            vector_store_query_mode=VectorStoreQueryMode.HYBRID,
+            vector_store_query_mode=(
+                VectorStoreQueryMode.HYBRID
+                if _embed_cfg.enable_hybrid
+                else VectorStoreQueryMode.DEFAULT
+            ),
             filters=filters,
             alpha=RETRIEVAL_ALPHA,
         )

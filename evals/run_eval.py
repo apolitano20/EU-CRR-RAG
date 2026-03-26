@@ -549,6 +549,7 @@ def _capture_run_config(args: "argparse.Namespace", run_name: str, run_timestamp
             "judge_model": args.judge_model if args.judge else None,
         },
         "retrieval": {
+            "embed_model": os.getenv("EMBED_MODEL", "bge-m3"),
             "top_k": _int("RETRIEVAL_TOP_K", 12),
             "alpha": _float("RETRIEVAL_ALPHA", 0.5),
             "similarity_cutoff": 0.3,

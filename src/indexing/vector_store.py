@@ -18,8 +18,6 @@ from qdrant_client.http.models import (
     VectorParams,
 )
 
-from src.indexing.bge_m3_sparse import sparse_doc_fn, sparse_query_fn
-
 logger = logging.getLogger(__name__)
 
 DEFAULT_COLLECTION = os.getenv("QDRANT_COLLECTION", "eu_crr")
@@ -82,19 +80,30 @@ class VectorStore:
     # ------------------------------------------------------------------
 
     def as_llama_vector_store(self):
-        """Return a LlamaIndex-compatible QdrantVectorStore with hybrid search enabled."""
+        """Return a LlamaIndex-compatible QdrantVectorStore.
+
+        Hybrid search (dense + sparse) is enabled when EMBED_MODEL=bge-m3 (default).
+        Dense-only mode is used when EMBED_MODEL=e5-large-instruct.
+        """
         from llama_index.vector_stores.qdrant import QdrantVectorStore
+        from src.indexing.embed_factory import get_embed_config
 
         if self._client is None:
             self.connect()
-        return QdrantVectorStore(
+
+        cfg = get_embed_config()
+        kwargs: dict = dict(
             client=self._client,
             collection_name=self.collection_name,
-            enable_hybrid=True,
-            sparse_doc_fn=sparse_doc_fn,
-            sparse_query_fn=sparse_query_fn,
-            sparse_vector_name="sparse",
         )
+        if cfg.enable_hybrid:
+            kwargs.update(
+                enable_hybrid=True,
+                sparse_doc_fn=cfg.sparse_doc_fn,
+                sparse_query_fn=cfg.sparse_query_fn,
+                sparse_vector_name="sparse",
+            )
+        return QdrantVectorStore(**kwargs)
 
     # ------------------------------------------------------------------
     # Convenience

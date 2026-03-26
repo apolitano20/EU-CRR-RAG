@@ -93,6 +93,150 @@ _ANNEX_KEYWORDS: dict[str, str] = {
 _ANNEX_NUM_PAT = re.compile(r"\b(I{1,3}|IV)\b")
 _ROMAN_ORDER = ["I", "II", "III", "IV"]
 
+# ── Structural cross-reference extraction ──────────────────────────────────────
+
+# Explicit non-empty Roman numerals up to XII (covers all CRR Parts and Titles).
+# Ordered longest-first so that "XII" matches before "XI" matches before "X" etc.
+_ROMAN_TO_INT: dict[str, int] = {
+    "XII": 12, "XI": 11, "X": 10, "IX": 9, "VIII": 8, "VII": 7,
+    "VI": 6, "V": 5, "IV": 4, "III": 3, "II": 2, "I": 1,
+}
+_INT_TO_ROMAN: dict[int, str] = {v: k for k, v in _ROMAN_TO_INT.items()}
+# Alternation ordered longest-first to avoid "I" shadowing "II"/"III" etc.
+_ROMAN_PAT_NE = r"(?:" + "|".join(_ROMAN_TO_INT) + r")"
+
+# Ordinal/cardinal words → integer (EN + IT, covers CRR range 1-12).
+# Sorted longest-first so longer words match before substrings.
+_WORD_TO_INT: dict[str, int] = {
+    "eleven": 11, "twelve": 12,
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5,
+    "sixth": 6, "seventh": 7, "eighth": 8, "ninth": 9, "tenth": 10,
+    "uno": 1, "due": 2, "tre": 3, "quattro": 4, "cinque": 5,
+    "sei": 6, "sette": 7, "otto": 8, "nove": 9, "dieci": 10,
+}
+_WORD_PAT = r"(?:" + "|".join(sorted(_WORD_TO_INT, key=len, reverse=True)) + r")"
+# A single structural-unit token: Roman numeral OR Arabic 1-12 OR ordinal word.
+_STRUCT_TOKEN = rf"(?:{_ROMAN_PAT_NE}|[0-9]{{1,2}}|{_WORD_PAT})"
+
+# Language-specific structural keywords: (part, title, chapter, section) tuples.
+_STRUCT_KEYWORDS: dict[str, tuple[str, str, str, str]] = {
+    "en": (r"Parts?", r"Titles?", r"Chapters?", r"Sections?"),
+    "it": (r"Part[ei]", r"Titol[oi]", r"Cap[oi]", r"Sezion[ei]"),
+    "pl": (r"Część(?:i|ą)?", r"Tytuł(?:ów|u)?", r"Rozdział(?:ów|u)?", r"Sekcj(?:a|i|ę)?"),
+}
+
+
+def _normalise_to_roman(token: str) -> Optional[str]:
+    """Convert a matched structural token to a Roman-numeral string (Parts/Titles)."""
+    upper = token.upper()
+    if upper in _ROMAN_TO_INT:
+        return upper
+    n = _WORD_TO_INT.get(token.lower())
+    if n is not None:
+        return _INT_TO_ROMAN.get(n)
+    try:
+        return _INT_TO_ROMAN.get(int(token))
+    except ValueError:
+        return None
+
+
+def _normalise_to_arabic(token: str) -> Optional[str]:
+    """Convert a matched structural token to an Arabic-numeral string (Chapters/Sections)."""
+    n = _WORD_TO_INT.get(token.lower())
+    if n is not None:
+        return str(n)
+    upper = token.upper()
+    if upper in _ROMAN_TO_INT:
+        return str(_ROMAN_TO_INT[upper])
+    try:
+        return str(int(token))
+    except ValueError:
+        return None
+
+
+def _expand_struct_range(lo_tok: str, hi_tok: str, to_roman: bool) -> list[str]:
+    """Expand a 'TOKEN to TOKEN' range into individual normalised values."""
+    conv = _normalise_to_roman if to_roman else _normalise_to_arabic
+    lo_str, hi_str = conv(lo_tok), conv(hi_tok)
+    if not lo_str or not hi_str:
+        return [v for v in (lo_str, hi_str) if v]
+    lo_int = _ROMAN_TO_INT.get(lo_str, 0) if to_roman else int(lo_str)
+    hi_int = _ROMAN_TO_INT.get(hi_str, 0) if to_roman else int(hi_str)
+    if lo_int and hi_int and lo_int <= hi_int:
+        if to_roman:
+            return [_INT_TO_ROMAN[n] for n in range(lo_int, hi_int + 1) if n in _INT_TO_ROMAN]
+        return [str(n) for n in range(lo_int, hi_int + 1)]
+    return [v for v in (lo_str, hi_str) if v]
+
+
+def _extract_structural_refs(text: str, language: str) -> tuple[str, str, str, str]:
+    """Extract Part/Title/Chapter/Section cross-references from article text.
+
+    Returns (referenced_parts_csv, referenced_titles_csv,
+             referenced_chapters_csv, referenced_sections_csv).
+    Parts/Titles normalised to Roman numerals; Chapters/Sections to Arabic numbers
+    — matching the format stored in Qdrant metadata.
+    """
+    kws = _STRUCT_KEYWORDS.get(language, _STRUCT_KEYWORDS["en"])
+    results: list[set[str]] = [set(), set(), set(), set()]
+    use_roman = [True, True, False, False]
+
+    for idx, kw in enumerate(kws):
+        to_roman = use_roman[idx]
+        conv = _normalise_to_roman if to_roman else _normalise_to_arabic
+
+        # Pass 1 — ranges: "Parts II to IV" / "Chapters 1 to 3"
+        # Also handles repeated-keyword form: "Part Two to Part Five"
+        range_pat = re.compile(
+            rf"\b{kw}\s+({_STRUCT_TOKEN})\s+to\s+(?:{kw}\s+)?({_STRUCT_TOKEN})\b", re.I
+        )
+        for m in range_pat.finditer(text):
+            results[idx].update(_expand_struct_range(m.group(1), m.group(2), to_roman))
+
+        # Pass 2 — individual tokens: "Part III", "Chapter 1", "Part Six"
+        # Negative lookahead avoids double-counting the range end-token ("IV" in "II to IV").
+        single_pat = re.compile(
+            rf"\b{kw}\s+({_STRUCT_TOKEN})\b(?!\s+to\b)", re.I
+        )
+        for m in single_pat.finditer(text):
+            # Skip if this is the start of a range (already handled in Pass 1)
+            after = text[m.end():]
+            if re.match(r"\s+to\b", after, re.I):
+                continue
+            val = conv(m.group(1))
+            if val:
+                results[idx].add(val)
+
+        # Pass 3 — comma/and lists after a single keyword: "Parts II, III and IV"
+        list_pat = re.compile(
+            rf"\b{kw}\s+({_STRUCT_TOKEN})"
+            rf"(?:\s*(?:,|and|or)\s+({_STRUCT_TOKEN}))+",
+            re.I,
+        )
+        for m in list_pat.finditer(text):
+            run = m.group()
+            # All tokens in the run (skip the keyword word itself by slicing past first space)
+            kw_end = re.search(r"\s", run).end()
+            for tok in re.findall(rf"\b({_STRUCT_TOKEN})\b", run[kw_end:], re.I):
+                val = conv(tok)
+                if val:
+                    results[idx].add(val)
+
+    def _sort_roman(vals: set[str]) -> str:
+        return ",".join(sorted(vals, key=lambda v: _ROMAN_TO_INT.get(v, 999)))
+
+    def _sort_arabic(vals: set[str]) -> str:
+        return ",".join(sorted(vals, key=lambda v: int(v) if v.isdigit() else 999))
+
+    return (
+        _sort_roman(results[0]),
+        _sort_roman(results[1]),
+        _sort_arabic(results[2]),
+        _sort_arabic(results[3]),
+    )
+
 
 def _extract_hierarchy(parent_id: str) -> dict:
     """Parse a EUR-Lex parent div ID into a hierarchy dict.
@@ -298,7 +442,7 @@ class EurLexIngester:
         if has_formula and self.use_llama_parse and self.llama_cloud_api_key:
             text = self._enrich_formulas_with_llamaparse(art_div, text, len(formula_images))
 
-        ref_articles, ref_external, ref_annexes = self._extract_cross_references(text)
+        ref_articles, ref_external, ref_annexes, ref_parts, ref_titles, ref_chapters, ref_sections = self._extract_cross_references(text)
 
         prefix = _build_hierarchy_prefix(
             part=hierarchy.get("part"),
@@ -324,6 +468,10 @@ class EurLexIngester:
             referenced_articles=ref_articles,
             referenced_external=ref_external,
             referenced_annexes=ref_annexes,
+            referenced_parts=ref_parts,
+            referenced_titles=ref_titles,
+            referenced_chapters=ref_chapters,
+            referenced_sections=ref_sections,
             has_table=has_table,
             has_formula=has_formula,
             chunk_type="ARTICLE",
@@ -378,6 +526,10 @@ class EurLexIngester:
                     referenced_articles=ref_articles,
                     referenced_external=ref_external,
                     referenced_annexes=ref_annexes,
+                    referenced_parts=ref_parts,
+                    referenced_titles=ref_titles,
+                    referenced_chapters=ref_chapters,
+                    referenced_sections=ref_sections,
                     has_table=bool(para_div.find("table")),
                     has_formula=bool(para_div.find("img", src=re.compile(r"^data:image"))),
                     chunk_type="PARAGRAPH",
@@ -773,13 +925,14 @@ class EurLexIngester:
     # Cross-reference extraction
     # ------------------------------------------------------------------
 
-    def _extract_cross_references(self, text: str) -> tuple[str, str, str]:
-        """Extract internal article numbers, external directive/regulation references, and annex refs.
+    def _extract_cross_references(self, text: str) -> tuple[str, str, str, str, str, str, str]:
+        """Extract article, external, annex, and structural cross-references from article text.
 
         Uses the language-specific article keyword from LanguageConfig so that
         "Articolo 26" (IT) and "Artykuł 26" (PL) are matched correctly.
 
-        Returns (ref_articles_csv, ref_external_csv, ref_annexes_csv).
+        Returns (ref_articles_csv, ref_external_csv, ref_annexes_csv,
+                 ref_parts_csv, ref_titles_csv, ref_chapters_csv, ref_sections_csv).
         """
         # Internal: language-aware article keyword, e.g. "Article 92" / "Articolo 92"
         # Exclude references to external regulations (e.g. "Article 10 of Regulation (EU)...")
@@ -831,8 +984,16 @@ class EurLexIngester:
             for nm in _ANNEX_NUM_PAT.finditer(anx_m.group()):
                 annex_nums.add(nm.group().upper())
 
+        ref_parts, ref_titles, ref_chapters, ref_sections = _extract_structural_refs(
+            text, self.language
+        )
+
         return (
             ",".join(sorted(art_nums, key=lambda x: int(re.sub(r"[^0-9]", "", x) or "0"))),
             ",".join(sorted(ext_refs)),
             ",".join(x for x in _ROMAN_ORDER if x in annex_nums),
+            ref_parts,
+            ref_titles,
+            ref_chapters,
+            ref_sections,
         )

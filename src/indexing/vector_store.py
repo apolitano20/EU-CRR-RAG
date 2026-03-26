@@ -180,7 +180,8 @@ class VectorStore:
         idempotent — calling it on a collection that already has the indexes is safe.
         """
         for field in ("language", "article", "level", "annex_id", "part", "title", "chapter", "section",
-                      "chunk_type", "parent_article_id", "para_id"):
+                      "chunk_type", "parent_article_id", "para_id",
+                      "referenced_parts", "referenced_titles", "referenced_chapters", "referenced_sections"):
             self._client.create_payload_index(
                 collection_name=self.collection_name,
                 field_name=field,

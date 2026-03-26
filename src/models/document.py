@@ -31,6 +31,10 @@ class DocumentNode:
     referenced_articles: str = ""              # comma-separated "4,13,92"
     referenced_external: str = ""              # e.g. "Directive 2013/36/EU"
     referenced_annexes: str = ""              # comma-separated Roman numeral IDs, e.g. "I,III"
+    referenced_parts: str = ""               # comma-separated Roman numerals, e.g. "III,VI"
+    referenced_titles: str = ""              # comma-separated Roman numerals, e.g. "I,II"
+    referenced_chapters: str = ""            # comma-separated Arabic numbers, e.g. "1,2"
+    referenced_sections: str = ""            # comma-separated Arabic numbers, e.g. "1,2"
     has_table: bool = False
     has_formula: bool = False
     # Paragraph-chunking fields (populated for PARAGRAPH-level nodes only)
@@ -55,6 +59,10 @@ class DocumentNode:
             "referenced_articles": self.referenced_articles,
             "referenced_external": self.referenced_external,
             "referenced_annexes": self.referenced_annexes,
+            "referenced_parts": self.referenced_parts,
+            "referenced_titles": self.referenced_titles,
+            "referenced_chapters": self.referenced_chapters,
+            "referenced_sections": self.referenced_sections,
             "has_table": self.has_table,
             "has_formula": self.has_formula,
             "chunk_type": self.chunk_type,

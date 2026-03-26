@@ -1,0 +1,31 @@
+2026-03-24 17:10:30,216  INFO      ============================================================
+2026-03-24 17:10:30,216  INFO      CRR Eval Runner
+2026-03-24 17:10:30,216  INFO        run     : run_18_contextual_prefix
+2026-03-24 17:10:30,216  INFO        dataset : evals\cases\golden_dataset.jsonl
+2026-03-24 17:10:30,216  INFO        api     : http://localhost:8080
+2026-03-24 17:10:30,216  INFO        output  : evals\results\run_18_contextual_prefix_cases.jsonl
+2026-03-24 17:10:30,217  INFO        workers : 4
+2026-03-24 17:10:30,217  INFO        dry-run : False
+2026-03-24 17:10:30,217  INFO        judge   : False
+2026-03-24 17:10:30,217  INFO        git     : 749d86c
+2026-03-24 17:10:30,217  INFO        note    : Contextual embedding prefix: prepend hierarchy breadcrumb (Part >  Title > Chapter > Section > Article N - Title) to every indexed document. Same  pipeline as run_17 (para_window reranker, enrichment on, ToC off, alpha=0.5). Tests     whether structural signals baked into the embedding space improve retrieval vs post-hoc title boost. Baseline: run_17 Hit@1=80.35%, MRR=0.840.
+2026-03-24 17:10:30,217  INFO      ============================================================
+2026-03-24 17:10:30,220  INFO      Loaded 173 cases from evals\cases\golden_dataset.jsonl.
+2026-03-24 17:10:30,220  INFO      173 cases to evaluate.
+2026-03-24 17:10:32,448  INFO      API healthy — index loaded, 1490 vector store items.
+2026-03-24 17:19:31,034  INFO      
+2026-03-24 17:19:31,036  INFO      ============================================================
+2026-03-24 17:19:31,036  INFO      Run complete: run_18_contextual_prefix
+2026-03-24 17:19:31,036  INFO        Cases: 173 ok / 0 failed / 173 total
+2026-03-24 17:19:31,036  INFO        Hit@1:      80.3%
+2026-03-24 17:19:31,037  INFO        Recall@3:   77.8%
+2026-03-24 17:19:31,037  INFO        Recall@5:   81.4%
+2026-03-24 17:19:31,037  INFO        MRR:        0.835
+2026-03-24 17:19:31,037  INFO      
+2026-03-24 17:19:31,037  INFO        --- By citation type ---
+2026-03-24 17:19:31,037  INFO        article_cited  (n=100)  Hit@1=91.0%  Recall@3=85.8%  MRR=0.910
+2026-03-24 17:19:31,037  INFO        open_ended     (n=73)  Hit@1=65.8%  Recall@3=66.9%  MRR=0.731
+2026-03-24 17:19:31,038  INFO      
+2026-03-24 17:19:31,038  INFO        P50 latency: 11145 ms
+2026-03-24 17:19:31,038  INFO        Summary → evals\results\run_18_contextual_prefix_summary.json
+2026-03-24 17:19:31,038  INFO      ============================================================

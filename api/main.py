@@ -11,7 +11,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import platform
 import re
+import sys
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -20,6 +22,24 @@ from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# ── Windows / Python 3.13 WMI hang workaround ────────────────────────────────
+# SQLAlchemy (a transitive dependency of llama_index) calls platform.machine()
+# at import time.  On Windows, platform.machine() → platform.uname() →
+# platform._wmi_query() which can hang indefinitely when the WMI COM service is
+# in a bad state (e.g. after a hard crash).  Pre-populating the uname cache
+# bypasses the WMI call entirely and has no functional impact.
+if sys.platform == "win32" and not getattr(platform, "_uname_cache", None):
+    try:
+        import struct
+        _bits = struct.calcsize("P") * 8
+        _machine = "AMD64" if _bits == 64 else "x86"
+        platform._uname_cache = platform.uname_result.__new__(
+            platform.uname_result, "Windows", "", "", "", _machine
+        )
+    except Exception:
+        pass  # Non-fatal — worst case WMI query runs normally
+# ─────────────────────────────────────────────────────────────────────────────
 
 import faulthandler as _faulthandler
 _faulthandler.enable()  # print native crash tracebacks to stderr
@@ -80,16 +100,23 @@ async def lifespan(app: FastAPI):
     # Pre-warm the BGE-M3 sparse encoder so it is in memory before the first
     # query arrives.  Without this, the first batch of concurrent eval requests
     # all block on _model_lock while the 570 MB model loads, causing timeouts.
+    # Skipped on Windows: PyTorch's XLM-RoBERTa embedding layer raises a native
+    # access violation (SIGSEGV) on some Windows/Python 3.13 combinations that
+    # cannot be caught by `except Exception` and kills the server process.
+    # The model loads lazily on first query instead — acceptable with workers=1.
     global _warmup_ok
-    try:
-        from src.indexing.bge_m3_sparse import _encode_query_both
-        logger.info("Pre-warming BGE-M3 sparse encoder…")
-        # Runs dense + sparse in a single lock acquisition, matching the hot path.
-        _encode_query_both("warm-up")
-        logger.info("BGE-M3 warm-up complete.")
+    if platform.system() == "Windows":
+        logger.info("BGE-M3 warm-up skipped on Windows (lazy load on first query).")
         _warmup_ok = True
-    except Exception as exc:
-        logger.warning("BGE-M3 warm-up skipped: %s", exc)
+    else:
+        try:
+            from src.indexing.bge_m3_sparse import _encode_query_both
+            logger.info("Pre-warming BGE-M3 sparse encoder…")
+            _encode_query_both("warm-up")
+            logger.info("BGE-M3 warm-up complete.")
+            _warmup_ok = True
+        except Exception as exc:
+            logger.warning("BGE-M3 warm-up skipped: %s", exc)
 
     yield
 

@@ -1,16 +1,16 @@
 {
-  "run_name": "run_20_mixed_chunking",
-  "run_timestamp": "20260324T235158Z",
-  "description": "Mixed retrieval: ARTICLE + PARAGRAPH chunks compete with no chunk_type filter.  ArticleDeduplicatorPostprocessor keeps the best-scored chunk per article (ARTICLE preferred within 2% margin), preventing top-k flooding. Winning PARAGRAPH chunks   upgraded to parent ARTICLE text at synthesis. ParagraphWindowReranker active.  Hypothesis: recovers run_17 performance on broad categories (liquidity, own_funds,      large_exposures) while preserving run_19 gains on localized/threshold cases.",
-  "git_commit": "c28385a",
+  "run_name": "run_18_contextual_prefix",
+  "run_timestamp": "20260324T161030Z",
+  "description": "Contextual embedding prefix: prepend hierarchy breadcrumb (Part >  Title > Chapter > Section > Article N - Title) to every indexed document. Same  pipeline as run_17 (para_window reranker, enrichment on, ToC off, alpha=0.5). Tests     whether structural signals baked into the embedding space improve retrieval vs post-hoc title boost. Baseline: run_17 Hit@1=80.35%, MRR=0.840.",
+  "git_commit": "749d86c",
   "eval": {
     "dataset_path": "evals\\cases\\golden_dataset.jsonl",
     "api_url": "http://localhost:8080",
     "workers": 4,
     "limit": null,
     "case_ids": null,
-    "judge_enabled": true,
-    "judge_model": "gpt-4o"
+    "judge_enabled": false,
+    "judge_model": null
   },
   "retrieval": {
     "top_k": 15,

@@ -1,0 +1,253 @@
+2026-03-25 01:29:01,123  INFO      ============================================================
+2026-03-25 01:29:01,123  INFO      CRR Eval Runner
+2026-03-25 01:29:01,123  INFO        run     : run_22_false_premise_prompt
+2026-03-25 01:29:01,123  INFO        dataset : evals\cases\golden_dataset.jsonl
+2026-03-25 01:29:01,124  INFO        api     : http://localhost:8080
+2026-03-25 01:29:01,124  INFO        output  : evals\results\run_22_false_premise_prompt_cases.jsonl
+2026-03-25 01:29:01,124  INFO        workers : 4
+2026-03-25 01:29:01,124  INFO        dry-run : False
+2026-03-25 01:29:01,125  INFO        judge   : False
+2026-03-25 01:29:01,125  INFO        git     : c28385a
+2026-03-25 01:29:01,125  INFO        note    : Synthesis prompt: add FALSE PREMISE RULE and CONDITIONAL LOGIC RULE   to catch false assumptions in questions and prevent conditional logic inversion.
+2026-03-25 01:29:01,125  INFO      ============================================================
+2026-03-25 01:29:01,127  INFO      Loaded 173 cases from evals\cases\golden_dataset.jsonl.
+2026-03-25 01:29:01,127  INFO      173 cases to evaluate.
+2026-03-25 01:29:03,306  INFO      API healthy — index loaded, 5979 vector store items.
+2026-03-25 01:37:31,724  INFO        retry 1/2 for case_147 in 5s…
+2026-03-25 01:37:37,675  INFO        retry 1/2 for case_149 in 5s…
+2026-03-25 01:37:37,828  INFO        retry 1/2 for case_150 in 5s…
+2026-03-25 01:39:22,270  INFO        retry 1/2 for case_159 in 5s…
+2026-03-25 01:39:37,828  INFO      
+2026-03-25 01:39:37,829  INFO      ============================================================
+2026-03-25 01:39:37,829  INFO      Run complete: run_22_false_premise_prompt
+2026-03-25 01:39:37,830  INFO        Cases: 173 ok / 0 failed / 173 total
+2026-03-25 01:39:37,830  INFO        Hit@1:      86.7%
+2026-03-25 01:39:37,830  INFO        Recall@3:   83.6%
+2026-03-25 01:39:37,830  INFO        Recall@5:   84.6%
+2026-03-25 01:39:37,832  INFO        MRR:        0.892
+2026-03-25 01:39:37,832  INFO      
+2026-03-25 01:39:37,832  INFO        --- By citation type ---
+2026-03-25 01:39:37,832  INFO        article_cited  (n=100)  Hit@1=91.0%  Recall@3=85.8%  MRR=0.910
+2026-03-25 01:39:37,833  INFO        open_ended     (n=73)  Hit@1=80.8%  Recall@3=80.6%  MRR=0.866
+2026-03-25 01:39:37,833  INFO      
+2026-03-25 01:39:37,833  INFO        P50 latency: 10108 ms
+2026-03-25 01:39:37,833  INFO        Summary → evals\results\run_22_false_premise_prompt_summary.json
+2026-03-25 01:39:37,833  INFO      ============================================================
+2026-03-25 01:42:21,960  INFO      ============================================================
+2026-03-25 01:42:21,961  INFO      CRR Eval Runner
+2026-03-25 01:42:21,961  INFO        run     : run_22_false_premise_prompt
+2026-03-25 01:42:21,961  INFO        dataset : evals\cases\golden_dataset.jsonl
+2026-03-25 01:42:21,961  INFO        api     : http://localhost:8080
+2026-03-25 01:42:21,961  INFO        output  : evals\results\run_22_false_premise_prompt_cases.jsonl
+2026-03-25 01:42:21,961  INFO        workers : 4
+2026-03-25 01:42:21,961  INFO        dry-run : False
+2026-03-25 01:42:21,961  INFO        judge   : True (model=gpt-4o)
+2026-03-25 01:42:21,961  INFO        git     : c28385a
+2026-03-25 01:42:21,961  INFO        note    : Synthesis prompt: add FALSE PREMISE RULE and CONDITIONAL LOGIC RULE   to catch false assumptions in questions and prevent conditional logic inversion.
+2026-03-25 01:42:21,961  INFO      ============================================================
+2026-03-25 01:42:21,962  INFO      --no-resume: deleted previous results at evals\results\run_22_false_premise_prompt_cases.jsonl.
+2026-03-25 01:42:21,964  INFO      Loaded 173 cases from evals\cases\golden_dataset.jsonl.
+2026-03-25 01:42:21,964  INFO      173 cases to evaluate.
+2026-03-25 01:42:24,116  INFO      API healthy — index loaded, 5979 vector store items.
+2026-03-25 01:42:37,374  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:42:37,411  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:42:38,765  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:42:46,765  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:42:50,285  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:42:51,175  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:43:02,130  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:43:05,656  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:43:06,968  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:43:15,820  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:43:16,041  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:43:20,482  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:43:24,085  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:43:27,372  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:43:39,072  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:43:40,923  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:43:48,764  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:43:55,182  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:43:58,674  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:44:05,914  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:44:06,403  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:44:14,141  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:44:14,203  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:44:26,217  INFO        retry 1/2 for case_003 in 5s…
+2026-03-25 01:44:29,085  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:44:43,705  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:44:48,905  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:44:54,481  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:45:03,241  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:45:05,830  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:45:11,656  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:45:22,438  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:45:26,465  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:45:29,419  INFO        retry 1/2 for case_018 in 5s…
+2026-03-25 01:45:37,955  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:45:40,130  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:45:45,951  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:45:53,129  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:45:54,956  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:45:58,611  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:46:03,174  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:46:05,408  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:46:08,478  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:46:10,339  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:46:16,216  INFO        retry 1/2 for case_026 in 5s…
+2026-03-25 01:46:18,156  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:46:18,564  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:46:19,520  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:46:28,885  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:46:29,962  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:46:34,908  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:46:36,972  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:46:42,194  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:46:46,647  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:46:46,958  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:46:52,340  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:46:56,590  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:46:57,522  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:47:01,572  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:47:04,043  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:47:10,077  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:47:12,959  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:47:17,189  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:47:17,692  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:47:20,203  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:47:25,398  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:47:26,947  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:47:28,591  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:47:33,599  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:47:33,635  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:47:34,478  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:47:36,323  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:47:41,096  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:47:42,683  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:47:46,198  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:47:46,305  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:48:00,591  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:48:00,736  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:48:01,715  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:48:02,110  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:48:10,756  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:48:11,105  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:48:14,722  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:48:16,418  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:48:23,997  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:48:25,376  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:48:26,653  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:48:32,377  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:48:33,784  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:48:36,586  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:48:38,377  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:48:40,014  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:48:48,296  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:48:51,005  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:48:51,535  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:48:53,152  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:49:01,665  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:49:02,415  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:49:03,355  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:49:04,805  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:49:10,067  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:49:12,035  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:49:14,155  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:49:15,113  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:49:18,663  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:49:25,200  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:49:27,124  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:49:27,547  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:49:33,312  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:49:41,482  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:49:41,532  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:49:46,489  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:49:51,215  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:49:51,554  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:49:52,378  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:49:54,523  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:50:00,924  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:50:03,885  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:50:04,324  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:50:04,704  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:50:15,042  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:50:15,175  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:50:19,270  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:50:22,202  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:50:24,557  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:50:25,006  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:50:30,341  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:50:35,195  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:50:38,350  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:50:41,033  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:50:42,175  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:50:48,663  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:50:49,733  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:50:52,320  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:51:00,844  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:51:09,401  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:51:12,794  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:51:14,813  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:51:23,091  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:51:23,670  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:51:27,552  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:51:36,783  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:51:39,793  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:51:45,261  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:51:52,320  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:51:56,891  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:52:02,038  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:52:08,560  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:52:17,112  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:52:22,276  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:53:32,997  INFO        retry 1/2 for case_132 in 5s…
+2026-03-25 01:53:33,000  INFO        retry 1/2 for case_142 in 5s…
+2026-03-25 01:53:36,274  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:53:37,902  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:53:51,343  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:53:51,881  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:53:52,638  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:54:07,299  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:54:07,719  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:54:12,038  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:54:28,309  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:54:30,009  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:54:30,545  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:54:42,999  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:54:43,396  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:54:49,049  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:54:50,152  INFO      Retrying request to /chat/completions in 0.488824 seconds
+2026-03-25 01:54:52,316  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:55:01,227  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:55:01,818  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:55:11,259  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:55:15,535  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:55:26,136  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:55:27,436  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:55:36,088  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:55:43,268  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:55:55,003  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:56:45,068  INFO        retry 1/2 for case_163 in 5s…
+2026-03-25 01:57:03,846  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:57:03,884  INFO        retry 1/2 for case_168 in 5s…
+2026-03-25 01:57:23,799  INFO      HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-25 01:57:23,952  INFO      
+2026-03-25 01:57:23,952  INFO      ============================================================
+2026-03-25 01:57:23,952  INFO      Run complete: run_22_false_premise_prompt
+2026-03-25 01:57:23,953  INFO        Cases: 173 ok / 0 failed / 173 total
+2026-03-25 01:57:23,953  INFO        Hit@1:      86.7%
+2026-03-25 01:57:23,954  INFO        Recall@3:   83.6%
+2026-03-25 01:57:23,954  INFO        Recall@5:   84.6%
+2026-03-25 01:57:23,954  INFO        MRR:        0.892
+2026-03-25 01:57:23,954  INFO      
+2026-03-25 01:57:23,955  INFO        --- By citation type ---
+2026-03-25 01:57:23,955  INFO        article_cited  (n=100)  Hit@1=91.0%  Recall@3=85.8%  MRR=0.910
+2026-03-25 01:57:23,955  INFO        open_ended     (n=73)  Hit@1=80.8%  Recall@3=80.6%  MRR=0.866
+2026-03-25 01:57:23,956  INFO      
+2026-03-25 01:57:23,956  INFO        --- LLM Judge scores ---
+2026-03-25 01:57:23,956  INFO        Correctness:   0.781
+2026-03-25 01:57:23,956  INFO        Completeness:  0.788
+2026-03-25 01:57:23,957  INFO        Faithfulness:  0.816
+2026-03-25 01:57:23,957  INFO      
+2026-03-25 01:57:23,958  INFO        P50 latency: 10094 ms
+2026-03-25 01:57:23,958  INFO        Summary → evals\results\run_22_false_premise_prompt_summary.json
+2026-03-25 01:57:23,958  INFO      ============================================================

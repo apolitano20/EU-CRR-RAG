@@ -1,0 +1,34 @@
+2026-03-25 23:16:22,122  INFO      ============================================================
+2026-03-25 23:16:22,122  INFO      CRR Eval Runner
+2026-03-25 23:16:22,122  INFO        run     : run_23_eval_fix
+2026-03-25 23:16:22,122  INFO        dataset : evals\cases\golden_dataset.jsonl
+2026-03-25 23:16:22,122  INFO        api     : http://localhost:8080
+2026-03-25 23:16:22,122  INFO        output  : evals\results\run_23_eval_fix_cases.jsonl
+2026-03-25 23:16:22,122  INFO        workers : 4
+2026-03-25 23:16:22,122  INFO        dry-run : False
+2026-03-25 23:16:22,123  INFO        judge   : False
+2026-03-25 23:16:22,123  INFO        git     : c28385a
+2026-03-25 23:16:22,123  INFO        note    : Purpose: Corrected measurement baseline — same config as run_20 but now outputs  _with_expanded metrics. Tells us how much of the 29.7% Recall@1 gap is measurement  artifact vs. real misses. No graph yet, so it's a clean apples-to-apples comparison  with run_20.
+2026-03-25 23:16:22,123  INFO      ============================================================
+2026-03-25 23:16:22,125  INFO      Loaded 173 cases from evals\cases\golden_dataset.jsonl.
+2026-03-25 23:16:22,125  INFO      173 cases to evaluate.
+2026-03-25 23:16:24,282  INFO      API healthy — index loaded, 5979 vector store items.
+2026-03-25 23:23:45,136  INFO        retry 1/2 for case_126 in 5s…
+2026-03-25 23:25:31,137  INFO        retry 1/2 for case_157 in 5s…
+2026-03-25 23:25:52,169  INFO        retry 2/2 for case_126 in 15s…
+2026-03-25 23:26:17,760  INFO      
+2026-03-25 23:26:17,760  INFO      ============================================================
+2026-03-25 23:26:17,760  INFO      Run complete: run_23_eval_fix
+2026-03-25 23:26:17,761  INFO        Cases: 173 ok / 0 failed / 173 total
+2026-03-25 23:26:17,761  INFO        Hit@1:      86.7%
+2026-03-25 23:26:17,761  INFO        Recall@3:   83.6%
+2026-03-25 23:26:17,761  INFO        Recall@5:   84.6%
+2026-03-25 23:26:17,761  INFO        MRR:        0.892
+2026-03-25 23:26:17,762  INFO      
+2026-03-25 23:26:17,762  INFO        --- By citation type ---
+2026-03-25 23:26:17,762  INFO        article_cited  (n=100)  Hit@1=91.0%  Recall@3=85.8%  MRR=0.910
+2026-03-25 23:26:17,762  INFO        open_ended     (n=73)  Hit@1=80.8%  Recall@3=80.6%  MRR=0.866
+2026-03-25 23:26:17,762  INFO      
+2026-03-25 23:26:17,762  INFO        P50 latency: 10469 ms
+2026-03-25 23:26:17,762  INFO        Summary → evals\results\run_23_eval_fix_summary.json
+2026-03-25 23:26:17,763  INFO      ============================================================

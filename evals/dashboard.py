@@ -32,9 +32,15 @@ except ImportError:
 # Paths
 # ---------------------------------------------------------------------------
 
-RESULTS_DIR    = Path("evals/results")
-DATASET_PATH   = Path("evals/cases/golden_dataset.jsonl")
-REVIEW_PATH    = Path("evals/cases/review_status.json")
+RESULTS_DIR       = Path("evals/results")
+DATASET_PATH      = Path("evals/cases/golden_dataset.jsonl")
+TEST_DATASET_PATH = Path("evals/cases/test_dataset.jsonl")
+REVIEW_PATH       = Path("evals/cases/review_status.json")
+
+KNOWN_DATASETS = {
+    "Golden dataset (173 cases)": DATASET_PATH,
+    "Test set — held-out (55 cases)": TEST_DATASET_PATH,
+}
 
 METRIC_KEYS = [
     "hit_at_1", "recall_at_1", "recall_at_3", "recall_at_5",
@@ -182,6 +188,24 @@ def _load_golden_dataset() -> list[dict]:
                 except Exception:
                     pass
     return cases
+
+
+@st.cache_data(show_spinner=False)
+def _load_cases(path: str) -> list[dict]:
+    """Load any JSONL dataset by path string. Returns normalised case list."""
+    result = []
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    try:
+                        result.append(_normalize_case(json.loads(line)))
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+    return result
 
 
 def _load_review_status() -> dict[str, dict]:
@@ -649,11 +673,14 @@ def _comparison_table(data_a: dict, data_b: dict, label_col: str, show_judge: bo
     if show_judge:
         metrics += list(JUDGE_METRIC_KEYS)
 
+    _all_labels = {**METRIC_LABELS, **JUDGE_METRIC_LABELS}
+    _judge_set  = set(JUDGE_METRIC_KEYS)
+
     # Build column list so we know delta column indices for highlighting
     fixed_cols  = [label_col, "N (A)", "N (B)"]
     metric_cols = []
     for m in metrics:
-        short = METRIC_LABELS[m]
+        short = _all_labels[m]
         metric_cols += [f"{short} A", f"{short} B", f"Δ {short}"]
     all_cols = fixed_cols + metric_cols
 
@@ -667,13 +694,19 @@ def _comparison_table(data_a: dict, data_b: dict, label_col: str, show_judge: bo
             "N (B)": vb_row.get("n", "—"),
         }
         for m in metrics:
-            short = METRIC_LABELS[m]
+            short = _all_labels[m]
             va = va_row.get(m)
             vb = vb_row.get(m)
-            delta = (va - vb) * 100 if (va is not None and vb is not None) else None
-            row[f"{short} A"]  = f"{va*100:.1f}%" if va is not None else "—"
-            row[f"{short} B"]  = f"{vb*100:.1f}%" if vb is not None else "—"
-            row[f"Δ {short}"]  = f"{delta:+.1f}%" if delta is not None else "—"
+            is_judge = m in _judge_set
+            delta = (va - vb) if (va is not None and vb is not None) else None
+            if is_judge:
+                row[f"{short} A"] = f"{va:.3f}" if va is not None else "—"
+                row[f"{short} B"] = f"{vb:.3f}" if vb is not None else "—"
+                row[f"Δ {short}"] = f"{delta:+.3f}" if delta is not None else "—"
+            else:
+                row[f"{short} A"] = f"{va*100:.1f}%" if va is not None else "—"
+                row[f"{short} B"] = f"{vb*100:.1f}%" if vb is not None else "—"
+                row[f"Δ {short}"] = f"{delta*100:+.1f}%" if delta is not None else "—"
         rows.append(row)
 
     df = pd.DataFrame(rows, columns=all_cols)
@@ -789,6 +822,37 @@ def _is_pid_alive(pid: int) -> bool:
         return False
 
 
+def _kill_eval_proc(proc: "subprocess.Popen | None", run_name: str) -> None:
+    """Kill an eval subprocess and mark its state file as 'stopped'."""
+    if proc is not None:
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                proc.kill()
+        except Exception:
+            pass
+    # Also kill by PID from state file (handles orphan case where proc is None)
+    state_path = RESULTS_DIR / f"{run_name}_state.json"
+    if state_path.exists():
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            pid = state.get("pid", -1)
+            if pid > 0 and _is_pid_alive(pid):
+                try:
+                    import signal as _sig
+                    os.kill(pid, _sig.SIGTERM)
+                except Exception:
+                    pass
+            state["status"] = "stopped"
+            state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+    for key in ("eval_proc", "eval_log_file", "eval_run_name", "eval_total_cases"):
+        st.session_state.pop(key, None)
+
+
 def _tail_log_file(path: Path, max_lines: int = 30) -> str:
     """Return the last *max_lines* lines of a log file, or a waiting message."""
     try:
@@ -831,7 +895,15 @@ def _run_eval_panel(empty: bool = True) -> None:
             orphan_done = orphan_ok + orphan_err
             pct = min(orphan_done / orphan_total, 1.0) if orphan_total > 0 else 0
             err_note = f", **{orphan_err} errors**" if orphan_err else ""
-            st.progress(pct, text=f"Running **{orphan_name}** … {orphan_ok} ok{err_note} / {orphan_total} cases (detected from disk)")
+            _pcol, _scol = st.columns([5, 1])
+            with _pcol:
+                st.progress(pct, text=f"Running **{orphan_name}** … {orphan_ok} ok{err_note} / {orphan_total} cases (detected from disk)")
+            with _scol:
+                if st.button("⏹ Stop", key="stop_orphan", type="secondary", use_container_width=True):
+                    _kill_eval_proc(None, orphan_name)
+                    st.warning(f"Eval **{orphan_name}** stopped.")
+                    st.rerun()
+                    return
             orphan_log = RESULTS_DIR / f"{orphan_name}.log"
             if orphan_log.exists():
                 with st.expander("Live logs", expanded=False):
@@ -858,7 +930,15 @@ def _run_eval_panel(empty: bool = True) -> None:
         pct        = min(done / total, 1.0) if total > 0 else 0
 
         err_note = f", **{n_err} errors**" if n_err else ""
-        st.progress(pct, text=f"Running **{run_name}** … {n_ok} ok{err_note} / {total} cases processed")
+        _pcol, _scol = st.columns([5, 1])
+        with _pcol:
+            st.progress(pct, text=f"Running **{run_name}** … {n_ok} ok{err_note} / {total} cases processed")
+        with _scol:
+            if st.button("⏹ Stop", key="stop_eval", type="secondary", use_container_width=True):
+                _kill_eval_proc(proc, run_name)
+                st.warning(f"Eval **{run_name}** stopped ({n_ok} ok, {n_err} errors recorded so far).")
+                st.rerun()
+                return
 
         log_path: Path | None = st.session_state.get("eval_log_file")
         if log_path is not None:
@@ -895,6 +975,15 @@ def _run_eval_panel(empty: bool = True) -> None:
             "**breakdowns** by difficulty/category/question-type, and a **case drill-down**."
         )
         st.markdown("---")
+
+    dataset_label = st.radio(
+        "Dataset",
+        list(KNOWN_DATASETS.keys()),
+        horizontal=True,
+        key="eval_dataset_choice",
+        help="Golden dataset is used for tuning; Test set is the held-out evaluation.",
+    )
+    selected_dataset_path = KNOWN_DATASETS[dataset_label]
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
@@ -960,7 +1049,7 @@ def _run_eval_panel(empty: bool = True) -> None:
 
     if start:
         run_name = run_name_input.strip() or datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        total    = int(limit) if limit > 0 else _count_valid_dataset_cases(DATASET_PATH)
+        total    = int(limit) if limit > 0 else _count_valid_dataset_cases(selected_dataset_path)
 
         cmd = [
             sys.executable, "-m", "evals.run_eval",
@@ -969,6 +1058,8 @@ def _run_eval_panel(empty: bool = True) -> None:
             "--api-url", api_url,
             "--timeout", str(int(req_timeout)),
         ]
+        if selected_dataset_path != DATASET_PATH:
+            cmd += ["--dataset", str(selected_dataset_path)]
         if limit > 0:
             cmd += ["--limit", str(limit)]
         if enable_judge:
@@ -1524,9 +1615,10 @@ def page_eval_results(runs: list) -> None:
         sel_id = case_ids[0]
         st.session_state.er_selected_id = sel_id
 
-    # Case inspector
+    # Case inspector — load reference answers from whichever dataset this run used
     st.markdown("---")
-    golden = {c["id"]: c for c in _load_golden_dataset()}
+    dataset_src = config.get("dataset_path", str(DATASET_PATH))
+    golden = {c["id"]: c for c in _load_cases(dataset_src)}
     selected_id = sel_id
     row = filtered_df[filtered_df["id"] == selected_id].iloc[0]
     golden_case = golden.get(selected_id, {})

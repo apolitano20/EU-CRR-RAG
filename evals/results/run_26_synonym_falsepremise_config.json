@@ -1,7 +1,7 @@
 {
-  "run_name": "run_20_mixed_chunking",
-  "run_timestamp": "20260324T235158Z",
-  "description": "Mixed retrieval: ARTICLE + PARAGRAPH chunks compete with no chunk_type filter.  ArticleDeduplicatorPostprocessor keeps the best-scored chunk per article (ARTICLE preferred within 2% margin), preventing top-k flooding. Winning PARAGRAPH chunks   upgraded to parent ARTICLE text at synthesis. ParagraphWindowReranker active.  Hypothesis: recovers run_17 performance on broad categories (liquidity, own_funds,      large_exposures) while preserving run_19 gains on localized/threshold cases.",
+  "run_name": "run_26_synonym_falsepremise",
+  "run_timestamp": "20260326T003813Z",
+  "description": "BM25 synonym expansion + False premise rule - Hypothesis: diluted_embedding Hit@1 lifts from 1/6 → 3+/6; false_friend Judge         Correctness lifts from ~0.60 → 0.75+. No impact expected on other categories.           Baseline: run_25.",
   "git_commit": "c28385a",
   "eval": {
     "dataset_path": "evals\\cases\\golden_dataset.jsonl",
@@ -31,6 +31,10 @@
   "query_pipeline": {
     "use_hyde": false,
     "use_toc_routing": false,
-    "use_query_enrichment": true
+    "use_query_enrichment": true,
+    "use_article_graph": true,
+    "use_mixed_chunking": true,
+    "use_paragraph_chunking": false,
+    "use_paragraph_window_reranker": true
   }
 }

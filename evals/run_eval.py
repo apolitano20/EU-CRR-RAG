@@ -35,7 +35,7 @@ from typing import Optional
 
 import requests
 
-from evals.metrics import compute_all, normalise_article
+from evals.metrics import compute_all, compute_all_with_expanded, normalise_article
 from evals.judge import JUDGE_METRIC_KEYS, judge_answer
 
 logging.basicConfig(
@@ -53,7 +53,12 @@ RETRIEVAL_METRIC_KEYS = [
     "hit_at_1", "recall_at_1", "recall_at_3", "recall_at_5",
     "mrr", "precision_at_3", "precision_at_5",
 ]
-METRIC_KEYS = RETRIEVAL_METRIC_KEYS + JUDGE_METRIC_KEYS
+EXPANDED_METRIC_KEYS = [
+    "hit_at_1_with_expanded", "recall_at_1_with_expanded",
+    "recall_at_3_with_expanded", "recall_at_5_with_expanded",
+    "mrr_with_expanded",
+]
+METRIC_KEYS = RETRIEVAL_METRIC_KEYS + EXPANDED_METRIC_KEYS + JUDGE_METRIC_KEYS
 
 
 # ---------------------------------------------------------------------------
@@ -318,6 +323,7 @@ def evaluate_case(
     expected_articles = [normalise_article(a) for a in case.get("expected_articles", [])]
 
     metrics = compute_all(expected_articles, retrieved_articles)
+    expanded_metrics = compute_all_with_expanded(expected_articles, retrieved_articles, expanded_articles)
 
     sources_raw = [
         {
@@ -354,6 +360,7 @@ def evaluate_case(
         "retrieved_articles": retrieved_articles,
         "expanded_articles": expanded_articles,
         **metrics,
+        **expanded_metrics,
         **judge_scores,
         "answer": rag_answer,
         "sources_raw": sources_raw,
@@ -385,6 +392,7 @@ def _error_result(
         "retrieved_articles": [],
         "expanded_articles": [],
         **{k: None for k in RETRIEVAL_METRIC_KEYS},
+        **{k: None for k in EXPANDED_METRIC_KEYS},
         **{k: None for k in JUDGE_METRIC_KEYS},
         "judge_rationale": None,
         "answer": "",
@@ -560,6 +568,10 @@ def _capture_run_config(args: "argparse.Namespace", run_name: str, run_timestamp
             "use_hyde": _bool("USE_HYDE", "false"),
             "use_toc_routing": _bool("USE_TOC_ROUTING", "false"),
             "use_query_enrichment": _bool("USE_QUERY_ENRICHMENT", "true"),
+            "use_article_graph": _bool("USE_ARTICLE_GRAPH", "false"),
+            "use_mixed_chunking": _bool("USE_MIXED_CHUNKING", "false"),
+            "use_paragraph_chunking": _bool("USE_PARAGRAPH_CHUNKING", "false"),
+            "use_paragraph_window_reranker": _bool("USE_PARAGRAPH_WINDOW_RERANKER", "false"),
         },
     }
 

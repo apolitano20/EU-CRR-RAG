@@ -2,6 +2,38 @@
 
 ---
 
+## [2026-03-26] Prompt completeness instructions are stochastic — use deterministic pre/post processing instead
+
+**Context:** Considering whether to add a "enumerate ALL thresholds" instruction to the synthesis prompt to fix the 17 cases where hit@1=1 but judge_correctness<0.7.
+**What happened / insight:** LLM prompt instructions for completeness are inherently stochastic — the model may or may not comply on any given query, and there is no guarantee it will enumerate every number even when told to. Instead, implemented two deterministic layers: (A) regex extraction of numerical thresholds from retrieved context, prepended as a structured fact-sheet before synthesis; (B) post-generation diff that appends any threshold present in cited articles but absent from the answer — no re-synthesis. Result: 7/17 target cases improved, 0 regressed.
+**Take-away:** For completeness guarantees, prefer deterministic input structuring (pre-process context to surface key facts explicitly) and deterministic output verification (check answer against source, inject missing values) over prompt instructions. Reserve prompt instructions for qualitative behaviour changes (tone, format, false-premise handling) where determinism is not achievable.
+
+---
+
+## [2026-03-26] Switching synthesis LLM requires switching the judge too — otherwise results are confounded
+
+**Context:** Considering switching synthesis from GPT-4o-mini to Claude Sonnet for quality improvement.
+**What happened / insight:** GPT-4o-mini (synthesis) is evaluated by GPT-4o (judge). If synthesis switches to Claude but judge stays GPT-4o, any score change conflates real quality improvement with model-affinity bias — GPT-4o is known to subtly prefer its own outputs. The results would be uninterpretable.
+**Take-away:** A model swap experiment must be treated as a clean new baseline: switch both synthesis and judge to the new model family in the same run, accept that results are not directly comparable to prior runs, and use the new run as a fresh reference point going forward.
+
+---
+
+## [2026-03-26] Combining two independent prompt/code changes in one eval run is safe when categories don't overlap
+
+**Context:** Deciding whether to run BM25 synonym expansion and the false premise prompt fix as one run or two sequential runs.
+**What happened / insight:** The two changes targeted completely different code paths (query preprocessor vs synthesis template) and non-overlapping case categories (`diluted_embedding` vs `false_friend`). Running them together saved one full judge eval run (~$15 and ~2h). Post-hoc attribution was still possible by examining per-case deltas for each category separately. No cross-category interaction effects were observed.
+**Take-away:** When two changes target orthogonal code paths and non-overlapping golden-dataset categories, combining them in one eval run is safe and economical. Attribution is still possible via category-level case analysis. Only keep changes separate when the interaction risk is real (e.g. both modify retrieval ranking, or both affect the same prompt template for the same query type).
+
+---
+
+## [2026-03-26] n=173 gives 1-SE ≈ 0.025–0.035 — most run-to-run deltas are noise
+
+**Context:** Comparing run_24 vs run_25 judge scores (faithfulness -0.027) and initially declaring run_24 SOTA.
+**What happened / insight:** With n=173 binary-ish proportions, SE = sqrt(p*(1-p)/n) ≈ 0.025–0.035 depending on the metric. A delta of -0.027 is within 1-SE — pure noise. The initial verdict (run_24 SOTA) was wrong; the correct conclusion was a wash. The pattern of consistent sign across all three judge metrics (all slightly negative) can be misleading — at this n, even a systematic sign with magnitudes within 1-SE is not significant.
+**Take-away:** Always compute 1-SE before interpreting run deltas. Flag as significant only when |delta| > 2×SE. A consistent sign across metrics is suggestive but not conclusive at n=173. For judge scores in particular, variance is high (LLM stochasticity compounds sampling noise) — treat anything under 2-SE as noise unless confirmed by case-level analysis.
+
+---
+
 ## [2026-03-25] Mixed retrieval beats pure paragraph retrieval — deduplication is the key
 
 **Context:** run_19 used PARAGRAPH-only retrieval and regressed badly overall (-9.8pp Hit@1 vs run_17) despite clear improvements on localized queries. The hypothesis was that finer chunks would improve precision.

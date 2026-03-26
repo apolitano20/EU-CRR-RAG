@@ -61,6 +61,9 @@ USE_PARAGRAPH_CHUNKING: bool = os.getenv("USE_PARAGRAPH_CHUNKING", "false").lowe
 # An ArticleDeduplicatorPostprocessor keeps only the best-scored chunk per article, and
 # context assembly upgrades any winning PARAGRAPH chunk to its parent ARTICLE text.
 USE_MIXED_CHUNKING: bool = os.getenv("USE_MIXED_CHUNKING", "false").lower() == "true"
+# When true, cross-reference expansion uses the pre-computed ArticleGraph for BFS traversal
+# with ref-type prioritisation instead of flat alphabetical CSV expansion.
+USE_ARTICLE_GRAPH: bool = os.getenv("USE_ARTICLE_GRAPH", "true").lower() == "true"
 _HISTORY_MAX_TURNS = 5
 # When EVAL_MODE=true all internal LLM calls use temperature=0 for reproducibility.
 EVAL_MODE: bool = os.getenv("EVAL_MODE", "false").lower() == "true"
@@ -422,6 +425,28 @@ class ParagraphWindowReranker(BaseNodePostprocessor):
         return sorted(nodes, key=lambda n: n.score or 0.0, reverse=True)[: self._top_n]
 
 
+_FALSE_PREMISE_RULE = (
+    "FALSE PREMISE RULE: If the question asks whether X qualifies as / is equivalent to / "
+    "satisfies / can be treated as Y, and the context clearly shows they are different concepts "
+    "or different requirements, your Direct Answer MUST begin with 'No.' and immediately state "
+    "what the CRR actually requires. Do not hedge or partially affirm a false premise. "
+    "Apply ONLY when the context clearly contradicts the question's assumption; answer normally otherwise.\n"
+    "Examples of correct false-premise handling (do not reproduce these verbatim — use the "
+    "actual context to answer):\n"
+    "  Q: Can government bonds received as collateral be recognised as variation margin for "
+    "leverage ratio purposes?\n"
+    "  A: No. Article 429c(3) restricts variation margin recognition to cash collateral only; "
+    "non-cash instruments such as government bonds do not qualify.\n"
+    "  Q: If liquid assets cover long-term funding needs over 12 months, is the institution "
+    "compliant with the liquidity coverage requirement?\n"
+    "  A: No. Article 412 governs a 30-day stressed outflow window (LCR); long-term structural "
+    "funding stability is a separate requirement under Article 413 (NSFR).\n"
+    "  Q: Is a 'personal investment company' considered a financial customer for liquidity "
+    "outflows?\n"
+    "  A: No. Article 411(3) defines personal investment company as a distinct category, "
+    "separate from financial customer under Article 411(1).\n"
+)
+
 _LEGAL_QA_TEMPLATE = PromptTemplate(
     "You are a regulatory compliance expert specialising in EU prudential banking regulation "
     "(CRR – Regulation (EU) No 575/2013).\n\n"
@@ -430,6 +455,7 @@ _LEGAL_QA_TEMPLATE = PromptTemplate(
     "CRITICAL CITATION RULE: Cite ONLY article numbers whose text appears verbatim in the "
     "context provided below. If the question asks about a specific article but that article "
     "is not present in the context, state: 'Article X was not found in the provided context.'\n"
+    + _FALSE_PREMISE_RULE +
     "If the context does not contain enough information to answer, respond with ONLY: "
     "'The provided context does not contain sufficient information to answer this question.'\n\n"
     "---------------------\n"
@@ -460,6 +486,7 @@ _LEGAL_QA_TEMPLATE_WITH_HISTORY = PromptTemplate(
     "CRITICAL CITATION RULE: Cite ONLY article numbers whose text appears verbatim in the "
     "context provided below. If the question asks about a specific article but that article "
     "is not present in the context, state: 'Article X was not found in the provided context.'\n"
+    + _FALSE_PREMISE_RULE +
     "If the context does not contain enough information to answer, respond with ONLY: "
     "'The provided context does not contain sufficient information to answer this question.'\n\n"
     "Prior conversation:\n{history_str}\n\n"
@@ -603,6 +630,16 @@ _SYNONYM_MAP: dict[str, str] = {
     "pledged assets": "encumbered assets",
     "pledged collateral": "encumbered assets",
     "core capital": "Common Equity Tier 1",
+    # run_26 additions — targets diluted_embedding failures where plain-language
+    # synonyms caused embedding/BM25 misses against precise CRR vocabulary.
+    "accumulated earnings": "retained earnings",
+    "maximum allowable exposure": "large exposure",
+    "pledged as collateral": "encumbered",
+    "easily sellable": "liquid assets high quality",
+    "available liquid resources": "liquid assets",
+    "solvency threshold": "initial capital own funds",
+    "internal permission for tailored risk evaluation": "Internal Ratings-Based approach IRB",
+    "blend of assets": "mixed pool",
 }
 _SYNONYM_RE = re.compile(
     r"\b(" + "|".join(re.escape(k) for k in _SYNONYM_MAP) + r")\b",
@@ -686,6 +723,92 @@ def _truncate_context(context_str: str, max_chars: int = MAX_CONTEXT_CHARS) -> s
         len(context_str), max_chars,
     )
     return window
+
+
+# ---------------------------------------------------------------------------
+# Synthesis completeness helpers (run_27)
+# ---------------------------------------------------------------------------
+
+# Patterns that reliably identify CRR numerical thresholds.
+# Ordered from most specific to least to reduce false-positive noise.
+_THRESHOLD_RE_LIST = [
+    re.compile(r"\b\d[\d,.]*%"),                                         # percentages: 4.5%, 1,250%
+    re.compile(r"\b\d+\s*(?:calendar\s+)?(?:days?|months?|years?|business\s+days?)", re.IGNORECASE),
+    re.compile(r"\bEUR\s*[\d,.]+(?:\s*(?:million|billion))?", re.IGNORECASE),
+    re.compile(r"\b\d+(?:\.\d+)?\s*basis\s+points?", re.IGNORECASE),
+]
+# Article header pattern as emitted by the context assembly loop.
+_ART_HEADER_RE = re.compile(r"^Article\s+(\w+)", re.IGNORECASE)
+
+
+def _extract_thresholds(text: str) -> list[str]:
+    """Return sorted unique numerical threshold strings found in *text*."""
+    found: set[str] = set()
+    for pat in _THRESHOLD_RE_LIST:
+        for m in pat.finditer(text):
+            found.add(m.group(0).strip())
+    return sorted(found)
+
+
+def _build_key_facts_block(context_str: str) -> str:
+    """Build a compact threshold preamble from the assembled context.
+
+    Parses each ``Article N — Title`` section and lists its numerical
+    thresholds.  The block is prepended to the context so the LLM has an
+    explicit fact-sheet and is less likely to omit key values.
+
+    Returns an empty string when no thresholds are detected (avoids adding
+    noise for purely definitional queries).
+    """
+    lines: list[str] = []
+    for section in context_str.split("\n\n---\n\n"):
+        header_line = section.strip().split("\n")[0]
+        thresholds = _extract_thresholds(section)
+        if thresholds:
+            lines.append(f"- {header_line}: {', '.join(thresholds)}")
+    if not lines:
+        return ""
+    return (
+        "KEY NUMERICAL THRESHOLDS (extracted from retrieved articles — "
+        "ensure ALL relevant ones are addressed in your answer):\n"
+        + "\n".join(lines)
+        + "\n\n"
+    )
+
+
+def _append_missing_thresholds(context_str: str, answer: str) -> str:
+    """Post-generation check: append any thresholds from *cited* articles
+    that do not appear in the answer.
+
+    Only checks articles referenced in the answer's ``Article References``
+    section to avoid injecting noise from unreferenced context sections.
+    Returns the answer unchanged when nothing is missing.
+    """
+    cited = set(re.findall(r"Article\s+(\w+)", answer, re.IGNORECASE))
+    if not cited:
+        return answer
+
+    missing_by_art: list[str] = []
+    for section in context_str.split("\n\n---\n\n"):
+        header_line = section.strip().split("\n")[0]
+        m = _ART_HEADER_RE.match(header_line)
+        if not m or m.group(1) not in cited:
+            continue
+        art_thresholds = _extract_thresholds(section)
+        absent = [t for t in art_thresholds if t not in answer]
+        if absent:
+            missing_by_art.append(f"Article {m.group(1)}: {', '.join(absent)}")
+
+    if not missing_by_art:
+        return answer
+
+    note = (
+        "\n\n> **Completeness note:** The following numerical thresholds appear in the "
+        "cited articles but were not explicitly stated above: "
+        + "; ".join(missing_by_art)
+        + "."
+    )
+    return answer + note
 
 
 def _expand_synonyms(query: str) -> str:
@@ -888,6 +1011,59 @@ def _generate_hyde_query(
     return query
 
 
+def _rewrite_query_crr_domain(
+    query: str,
+    api_key: Optional[str],
+    model: str = "gpt-4o-mini",
+) -> str:
+    """Rewrite a plain-language query into CRR legal register before embedding.
+
+    Unlike HyDE (which generates a hypothetical passage), this produces a concise
+    rewritten question that replaces informal terms with the exact legal vocabulary
+    used in the regulation text. Targets terminology dilution failures where the
+    query shares few tokens with the article (e.g. "pledged bonds" vs "encumbered
+    assets", "total risk exposure" vs "TREA", "cash pooling" vs "cash pooling
+    arrangements under Article 429b").
+
+    Returns:
+        Rewritten query string, or original query on failure.
+    """
+    prompt = (
+        "You are a CRR (EU Capital Requirements Regulation No 575/2013) legal terminology expert.\n\n"
+        "Rewrite the question below using the precise legal vocabulary found in the CRR text itself.\n"
+        "Replace informal or plain-language terms with the exact CRR/Basel III definitions "
+        "(e.g. 'bank' → 'credit institution', 'total risk exposure' → 'total risk exposure amount (TREA)', "
+        "'liquid assets' → 'high-quality liquid assets (HQLA)', 'leveraged loan' → 'exposure', "
+        "'pledged bonds' → 'encumbered assets', 'profit transfer agreement' → 'Gewinnabführungsvertrag').\n\n"
+        "Rules:\n"
+        "- Preserve the question's intent and structure exactly\n"
+        "- Add the official CRR term alongside or in place of informal terms\n"
+        "- Keep it as a question, maximum 2 sentences\n"
+        "- Do NOT answer the question\n"
+        "- Return ONLY the rewritten question, no explanation or preamble\n\n"
+        f"Question: {query}"
+    )
+    try:
+        client = openai.OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            timeout=10.0,
+            max_tokens=120,
+            **_EVAL_KWARGS,
+        )
+        rewritten = (response.choices[0].message.content or "").strip()
+        if rewritten and rewritten != query:
+            logger.info(
+                "Domain rewrite: '%s...' → '%s...'",
+                query[:60], rewritten[:60],
+            )
+            return rewritten
+    except Exception as exc:
+        logger.warning("Domain query rewrite failed (%s) — using original query", exc)
+    return query
+
+
 def _generate_sub_queries(
     query: str,
     api_key: Optional[str],
@@ -1026,6 +1202,9 @@ class QueryEngine:
         self._tiebreaker = None
         self._defs: Optional[object] = None  # DefinitionsStore, imported lazily
         self._toc: Optional[object] = None   # TocStore, imported lazily
+        self._article_graph: Optional[object] = None  # ArticleGraph, built lazily on first use
+        self._graph_build_lock = threading.Lock()
+        self._graph_built = False
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -1131,6 +1310,42 @@ class QueryEngine:
     def is_loaded(self) -> bool:
         return self._engine is not None
 
+    def _ensure_graph(self) -> Optional[object]:
+        """Return the ArticleGraph, building it on first call (lazy, thread-safe).
+
+        Returns None if USE_ARTICLE_GRAPH=false or if the Qdrant client is unavailable.
+        """
+        if not USE_ARTICLE_GRAPH:
+            return None
+        if self._graph_built:
+            return self._article_graph
+        with self._graph_build_lock:
+            if self._graph_built:
+                return self._article_graph
+            client = self.vector_store._client
+            if client is None:
+                logger.warning("ArticleGraph: Qdrant client not available — skipping graph build.")
+                self._graph_built = True
+                return None
+            try:
+                from src.query.article_graph import ArticleGraph
+                graph = ArticleGraph()
+                graph.build_from_qdrant(
+                    client=client,
+                    collection_name=self.vector_store.collection_name,
+                    language="en",
+                )
+                self._article_graph = graph
+                logger.info(
+                    "ArticleGraph ready: %d nodes, %d edges",
+                    graph.node_count, graph.edge_count,
+                )
+            except Exception as exc:
+                logger.warning("ArticleGraph build failed: %s", exc)
+                self._article_graph = None
+            self._graph_built = True
+        return self._article_graph
+
     # ------------------------------------------------------------------
     # Query
     # ------------------------------------------------------------------
@@ -1140,8 +1355,14 @@ class QueryEngine:
         user_query: str,
         language: Optional[str] = None,
         max_cross_ref_expansions: Optional[int] = None,
+        is_multi_hop: bool = False,
     ) -> tuple:
         """Run stages 1 & 2 (retrieval + cross-reference expansion).
+
+        Args:
+            is_multi_hop: When True, expansion uses deeper BFS (depth=2), wider seeding
+                          (source_limit=4), and a larger budget (min 5). Targets queries
+                          that explicitly compare or relate multiple CRR concepts.
 
         Returns:
             (all_nodes_for_synthesis, sources, trace_id, normalised_query, engine)
@@ -1211,8 +1432,25 @@ class QueryEngine:
         # Stage 2: Cross-reference expansion
         expansions = max_cross_ref_expansions if max_cross_ref_expansions is not None \
             else self.max_cross_ref_expansions
+        # Use the article graph only when primary retrieval surfaces ≥2 distinct articles.
+        # Single-article retrievals are already well-anchored; graph expansion adds noise there.
+        # This signal is post-retrieval and available at runtime (no query labels needed).
+        retrieved_articles = {
+            n.node.metadata.get("article", "")
+            for n in source_nodes
+            if n.node.metadata.get("article")
+        }
+        use_graph = len(retrieved_articles) >= 2
+        # Multi-hop queries (regex or multi-article retrieval) get wider, deeper expansion.
+        exp_source_limit = 4 if (is_multi_hop or use_graph) else 2
+        exp_depth        = 2 if (is_multi_hop or use_graph) else 1
+        exp_budget       = max(expansions, 5) if (is_multi_hop or use_graph) else expansions
         t_exp = time.perf_counter()
-        expanded_nodes = self._expand_cross_references(source_nodes, language=language, limit=expansions)
+        expanded_nodes = self._expand_cross_references(
+            source_nodes, language=language, limit=exp_budget,
+            depth=exp_depth, source_limit=exp_source_limit,
+            use_graph=use_graph,
+        )
         t_expand_ms = round((time.perf_counter() - t_exp) * 1000)
 
         # Deduplicate expanded nodes against primary results
@@ -1363,13 +1601,19 @@ class QueryEngine:
         # Stage 3: LLM synthesis — call OpenAI directly with optional history injection
         t_syn = time.perf_counter()
         history_str = _format_history(history)
+
+        # Part A: prepend structured threshold fact-sheet so the LLM has
+        # explicit scaffolding and is less likely to omit key values.
+        key_facts = _build_key_facts_block(context_str)
+        synthesis_context = key_facts + context_str if key_facts else context_str
+
         if history_str:
             prompt = _LEGAL_QA_TEMPLATE_WITH_HISTORY.format(
-                history_str=history_str, context_str=context_str, query_str=normalised_query
+                history_str=history_str, context_str=synthesis_context, query_str=normalised_query
             )
         else:
             prompt = _LEGAL_QA_TEMPLATE.format(
-                context_str=context_str, query_str=normalised_query
+                context_str=synthesis_context, query_str=normalised_query
             )
 
         oai_client = openai.OpenAI(api_key=self.openai_api_key)
@@ -1379,6 +1623,11 @@ class QueryEngine:
             timeout=120.0,
         )
         answer = (oai_response.choices[0].message.content or "").strip()
+
+        # Part B: deterministic post-check — append any thresholds from cited
+        # articles that the LLM omitted, without re-synthesising.
+        answer = _append_missing_thresholds(context_str, answer)
+
         t_synthesis_ms = round((time.perf_counter() - t_syn) * 1000)
 
         latency_ms = round((time.perf_counter() - t0) * 1000)
@@ -1453,6 +1702,7 @@ class QueryEngine:
         _seen: Optional[set] = None,
         _seen_annexes: Optional[set] = None,
         source_limit: int = 2,
+        use_graph: bool = False,
     ) -> list:
         """Fetch articles and annexes referenced by retrieved nodes that aren't already in the result set.
 
@@ -1480,49 +1730,77 @@ class QueryEngine:
             if langs:
                 language = Counter(langs).most_common(1)[0][0]
 
-        # Collect referenced articles from the top source_limit primary nodes only.
-        # Using all nodes can surface refs from weakly-relevant articles; the strongest
-        # results carry the most trustworthy cross-reference signal.
-        refs_to_fetch: set[str] = set()
-        for node in source_nodes[:source_limit]:
-            csv = node.node.metadata.get("referenced_articles", "")
-            if csv:
-                for ref in csv.split(","):
-                    ref = ref.strip()
-                    if ref and ref not in _seen:
-                        refs_to_fetch.add(ref)
+        # Determine candidate article numbers to fetch.
+        # Use ArticleGraph BFS only for multi-hop queries (use_graph=True).
+        # Single-article queries fall through to CSV fallback to avoid injecting
+        # noise from tangentially cross-referenced articles.
+        graph = self._ensure_graph() if use_graph else None
+        if graph is not None and graph.is_built:
+            seed_arts = []
+            for node in source_nodes[:source_limit]:
+                art = node.node.metadata.get("article", "")
+                if art and art not in seed_arts:
+                    seed_arts.append(art)
+            candidates = graph.bfs_expand(
+                seeds=seed_arts,
+                max_depth=depth,
+                budget=limit,
+                exclude=_seen,
+            )
+            logger.debug("ArticleGraph BFS from %s → %d candidates", seed_arts, len(candidates))
+        else:
+            # Fallback: collect from referenced_articles CSV, sort deterministically.
+            refs_to_fetch: set[str] = set()
+            for node in source_nodes[:source_limit]:
+                csv = node.node.metadata.get("referenced_articles", "")
+                if csv:
+                    for ref in csv.split(","):
+                        ref = ref.strip()
+                        if ref and ref not in _seen:
+                            refs_to_fetch.add(ref)
+            candidates = sorted(refs_to_fetch, key=_ref_sort_key)
 
-        # Sort deterministically (numeric part first, alpha suffix second) so the
-        # chosen subset is stable across runs and independent of Python hash order.
-        candidates = sorted(refs_to_fetch, key=_ref_sort_key)
+        # Fetch candidate articles — in parallel for speed.
         expanded: list = []
-        for ref_art in candidates:
-            if len(expanded) >= limit:
-                break
-            if ref_art == "4":
-                _seen.add("4")
-                logger.debug(
-                    "Cross-ref expansion: skipping Article 4 (definitions glossary)"
-                )
-                continue
-            try:
+        to_fetch = [r for r in candidates if r not in _seen and r != "4"][:limit]
+        if to_fetch:
+            from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
+
+            def _fetch_one(ref_art: str):
                 conditions = [("article", ref_art)]
                 if language:
                     conditions.append(("language", language))
                 if USE_PARAGRAPH_CHUNKING or USE_MIXED_CHUNKING:
-                    # In paragraph/mixed mode the index holds multiple chunk types per article;
-                    # cross-ref expansion always fetches the full ARTICLE chunk for context.
                     conditions.append(("chunk_type", "ARTICLE"))
-                results = self._fetch_nodes_direct(conditions, top_k=1)
-                expanded.extend(results)
+                return ref_art, self._fetch_nodes_direct(conditions, top_k=1)
+
+            max_workers = min(3, len(to_fetch))
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                futures = {pool.submit(_fetch_one, r): r for r in to_fetch}
+                fetch_results: dict[str, list] = {}
+                for fut in _as_completed(futures):
+                    ref_art = futures[fut]
+                    try:
+                        _, nodes = fut.result()
+                        fetch_results[ref_art] = nodes
+                    except Exception as exc:
+                        logger.warning("Cross-ref expansion failed for Article %s: %s", ref_art, exc)
+                        fetch_results[ref_art] = []
+
+            # Re-order results to match candidate priority order and apply limit
+            for ref_art in to_fetch:
+                if len(expanded) >= limit:
+                    break
+                nodes = fetch_results.get(ref_art, [])
+                expanded.extend(nodes)
                 _seen.add(ref_art)
-            except Exception as exc:
-                # A failed fetch does NOT consume a cap slot — continue to next candidate.
-                logger.warning("Cross-ref expansion failed for Article %s: %s", ref_art, exc)
+
+        if "4" in candidates:
+            _seen.add("4")
 
         logger.info(
-            "Cross-reference expansion (depth=%d): fetched %d additional nodes.",
-            depth, len(expanded),
+            "Cross-reference expansion (depth=%d, graph=%s): fetched %d additional nodes.",
+            depth, graph is not None and graph.is_built, len(expanded),
         )
 
         # Annex expansion
@@ -1552,8 +1830,8 @@ class QueryEngine:
             except Exception as exc:
                 logger.warning("Cross-ref expansion failed for Annex %s: %s", ref_anx, exc)
 
-        # Recursive second-hop expansion
-        if depth > 1 and expanded:
+        # Recursive second-hop expansion (fallback path only — ArticleGraph handles depth natively).
+        if depth > 1 and expanded and (graph is None or not graph.is_built):
             remaining = max(0, limit - len(expanded))
             second_hop = self._expand_cross_references(
                 expanded, language=language, limit=remaining, depth=depth - 1,

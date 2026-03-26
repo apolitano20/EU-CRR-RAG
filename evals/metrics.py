@@ -80,3 +80,28 @@ def compute_all(expected: list[str], retrieved: list[str]) -> dict:
         "precision_at_3": precision_at_k(norm_exp, norm_ret, 3),
         "precision_at_5": precision_at_k(norm_exp, norm_ret, 5),
     }
+
+
+def compute_all_with_expanded(
+    expected: list[str],
+    retrieved: list[str],
+    expanded: list[str],
+) -> dict:
+    """Metrics treating expanded articles as additional retrieved results (appended after ranked).
+
+    Expanded articles are lower-priority than primary retrieved results but still count
+    toward recall. This measures the combined effectiveness of retrieval + cross-ref expansion
+    and exposes the true gap vs. the artificially deflated Recall numbers when expansion is ignored.
+    """
+    norm_exp = [normalise_article(a) for a in expected]
+    combined = deduplicate_ranked(
+        [normalise_article(a) for a in retrieved] +
+        [normalise_article(a) for a in expanded]
+    )
+    return {
+        "hit_at_1_with_expanded":    hit_at_k(norm_exp, combined, 1),
+        "recall_at_1_with_expanded": recall_at_k(norm_exp, combined, 1),
+        "recall_at_3_with_expanded": recall_at_k(norm_exp, combined, 3),
+        "recall_at_5_with_expanded": recall_at_k(norm_exp, combined, 5),
+        "mrr_with_expanded":         mrr(norm_exp, combined),
+    }

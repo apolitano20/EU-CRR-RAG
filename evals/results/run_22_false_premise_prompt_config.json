@@ -1,7 +1,7 @@
 {
-  "run_name": "run_20_mixed_chunking",
-  "run_timestamp": "20260324T235158Z",
-  "description": "Mixed retrieval: ARTICLE + PARAGRAPH chunks compete with no chunk_type filter.  ArticleDeduplicatorPostprocessor keeps the best-scored chunk per article (ARTICLE preferred within 2% margin), preventing top-k flooding. Winning PARAGRAPH chunks   upgraded to parent ARTICLE text at synthesis. ParagraphWindowReranker active.  Hypothesis: recovers run_17 performance on broad categories (liquidity, own_funds,      large_exposures) while preserving run_19 gains on localized/threshold cases.",
+  "run_name": "run_22_false_premise_prompt",
+  "run_timestamp": "20260325T004221Z",
+  "description": "Synthesis prompt: add FALSE PREMISE RULE and CONDITIONAL LOGIC RULE   to catch false assumptions in questions and prevent conditional logic inversion.",
   "git_commit": "c28385a",
   "eval": {
     "dataset_path": "evals\\cases\\golden_dataset.jsonl",

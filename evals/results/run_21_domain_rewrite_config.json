@@ -1,7 +1,7 @@
 {
-  "run_name": "run_20_mixed_chunking",
-  "run_timestamp": "20260324T235158Z",
-  "description": "Mixed retrieval: ARTICLE + PARAGRAPH chunks compete with no chunk_type filter.  ArticleDeduplicatorPostprocessor keeps the best-scored chunk per article (ARTICLE preferred within 2% margin), preventing top-k flooding. Winning PARAGRAPH chunks   upgraded to parent ARTICLE text at synthesis. ParagraphWindowReranker active.  Hypothesis: recovers run_17 performance on broad categories (liquidity, own_funds,      large_exposures) while preserving run_19 gains on localized/threshold cases.",
+  "run_name": "run_21_domain_rewrite",
+  "run_timestamp": "20260325T001218Z",
+  "description": "Domain query rewriting: rewrite plain-language queries into CRR  legal register before embedding. Targets diluted_embedding failures.",
   "git_commit": "c28385a",
   "eval": {
     "dataset_path": "evals\\cases\\golden_dataset.jsonl",
@@ -9,8 +9,8 @@
     "workers": 4,
     "limit": null,
     "case_ids": null,
-    "judge_enabled": true,
-    "judge_model": "gpt-4o"
+    "judge_enabled": false,
+    "judge_model": null
   },
   "retrieval": {
     "top_k": 15,
@@ -31,6 +31,6 @@
   "query_pipeline": {
     "use_hyde": false,
     "use_toc_routing": false,
-    "use_query_enrichment": true
+    "use_query_enrichment": false
   }
 }

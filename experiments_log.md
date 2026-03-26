@@ -4,8 +4,8 @@ Chronological record of all eval runs against the 173-case golden dataset.
 Judge: gpt-4o (3 dimensions: correctness, completeness, faithfulness, scale 0–1).
 Dataset: `evals/cases/golden_dataset.jsonl` — 173 cases, 100 article-cited / 73 open-ended.
 
-**Current best run (retrieval only):** `run_12_adj_tiebreaker` — Hit@1=78.0%, Recall@3=79.2%, MRR=0.824 (173/173, ADJACENT_TIEBREAK_DELTA=0.05).
-**Current best run (with judge):** `run_2e_baseline` — Hit@1=76.3%, Recall@3=79.3%, MRR=0.815, Judge Correctness=0.770, Judge Faithfulness=0.790 (173/173, 0 failures, EVAL_MODE=true).
+**Current best run (retrieval only):** `run_20_mixed_chunking` — Hit@1=**86.7%**, Recall@3=83.6%, MRR=0.891 (173/173, mixed ARTICLE+PARAGRAPH nodes + ArticleDeduplicatorPostprocessor). **New SOTA.**
+**Current best run (with judge):** `run_20_mixed_chunking` — Judge Correctness=0.793, Judge Faithfulness=n/a (partial run). Previous clean judge reference: `run_2e_baseline` — Hit@1=76.3%, MRR=0.815, Judge Correctness=0.770.
 
 ---
 
@@ -33,6 +33,17 @@ Dataset: `evals/cases/golden_dataset.jsonl` — 173 cases, 100 article-cited / 7
 | 2e | **run_2e_baseline** ⭐ | 2026-03-24 | **173/173** | 76.3% | 79.3% | 0.815 | **0.770** | **0.790** | 10.3s | **Clean judge reference baseline** — workers=1 (0 failures), EVAL_MODE=true, surgical synonyms active |
 | 12 | **run_12_adj_tiebreaker** ⭐ | 2026-03-24 | **173/173** | **78.0%** | 79.2% | **0.824** | — | — | 9.9s | **Adjacent tiebreaker delta=0.05: +1.7pp Hit@1, false_friend +14.3pp. Current best retrieval.** |
 | 13 | run_13_reranker_L12 | 2026-03-24 | 173/173 | 76.9% | 78.8% | 0.822 | — | — | 10.3s | L-12 reranker: false_friend +7pp but definition/diluted_embedding regression. Reverted to L-6. |
+| 15 | run_15_toc2 | 2026-03-24 | 173/173 | 76.3% | 80.2% | 0.824 | — | — | ~13s | Universal ToC routing (parallel, timeout-fixed): overall regression −1.7pp. Gains multi_article +9.4pp, false_friend +7.1pp, diluted_embedding +37.5pp Recall@3. Losses: liquidity −7.4pp, own_funds −6.5pp. |
+| 16 | run_16_toc_confidence | 2026-03-24 | 173/173 | 77.5% | 79.2% | 0.821 | — | — | ~11s | Selective ToC routing (fires when max reranker score <0.55): still −0.5pp vs run_12. ToC routing retired. |
+| 17 | **run_17_para_window** ⭐ | 2026-03-24 | 173/173 | **80.3%** | 78.9% | **0.840** | — | — | ~11.3s | Para-window reranker: **+2.3pp Hit@1 vs run_12.** false_friend +14.3pp, open_ended +4.1pp, negative +12.5pp. diluted_embedding −16.7pp (6 cases only). |
+| 18 | run_18_contextual_prefix | 2026-03-24 | 173/173 | 80.3% | 77.8% | 0.835 | — | — | ~12.3s | Contextual hierarchy prefix in embedding text. Neutral vs run_17 overall. ciu_treatment −20pp, capital_ratios +3.2pp. Gains gated on paragraph chunking. |
+| 19 | run_19_para_chunking | 2026-03-24 | 173/173 | 70.5% | 69.6% | 0.733 | — | — | ~10s | Para-chunked dual-doc index, PARAGRAPH-only retrieval. Regression overall — top-k flooding. credit_risk_sa +40pp, cash_pooling +100pp. Led to mixed-chunking insight. |
+| **20** | **run_20_mixed_chunking** ⭐ | 2026-03-25 | 173/173 | **86.7%** | **83.6%** | **0.891** | **0.793** | — | ~10.5s | **Mixed ARTICLE+PARAGRAPH retrieval + ArticleDeduplicatorPostprocessor. New SOTA. +6.4pp Hit@1 vs run_17, zero regressions. Judge +2.3pp vs run_2e.** |
+| 21 | run_21_domain_rewrite | 2026-03-25 | 173/173 | 80.9% | 80.4% | 0.849 | — | — | ~11s | Domain query rewriting (plain-language→CRR register via gpt-4o-mini). Hit@1 −5.8pp vs run_20. diluted_embedding unchanged. Regression. Reverted. |
+| 22 | run_22_false_premise_prompt | 2026-03-25 | 173/173 | 86.7% | 83.6% | 0.892 | 0.782 | — | ~10.5s | Synthesis prompt FALSE PREMISE RULE + CONDITIONAL LOGIC RULE. false_friend −12.2pp (over-hedging). Overall Judge −1.1pp. Reverted. |
+| 23 | run_23_eval_fix | 2026-03-26 | 173/173 | 86.7% | 83.6% | 0.891 | — | — | ~10.5s | Measurement fix: added `_with_expanded` metric suite counting expanded articles as lower-ranked retrieved results. Confirmed measurement bug: multi_article recall@3_with_expanded = 83.3% vs 38.9% raw. Baseline identical to run_20. USE_ARTICLE_GRAPH=false. |
+| 24 | run_24_article_graph (judged) | 2026-03-26 | 173/173 | 86.7% | 83.6% | 0.891 | 0.787 | 0.830 | ~10.8s | Article dependency graph: BFS expansion (prerequisite→procedural→general→back_ref priority) replaces flat CSV sort. Dynamic multi-hop params (source_limit=4, depth=2, budget=5). Graph confirmed active. **Split result**: multi faithfulness +6.9pp, multi_hop faithfulness +5.4pp, own_funds +3.5pp correctness/+4.5pp faithfulness, leverage +6.7pp faithfulness. Regressions: single-article −1.1pp correctness, large_exposures faithfulness −4.3pp, negative faithfulness −6.2pp. Overall −0.6pp correctness. Root cause: graph adds noise for queries that don't need extra context. `is_multi_hop` regex unusable as gate (only 6% coverage of multi_hop cases). Fix: gate on post-retrieval distinct-article count. → run_25. |
+| 25 | run_25_graph_gated | 2026-03-26 | pending | — | — | — | — | — | — | Graph gated on post-retrieval signal: BFS fires only when primary retrieval surfaces ≥2 distinct articles (fires for 62% of multi-article cases, 35% of multi_hop, only 33% of single-article false positives vs 100% in run_24). Hypothesis: preserves multi-hop/multi-article faithfulness gains while recovering single-article correctness regression. |
 
 ---
 
@@ -552,10 +563,219 @@ Dataset: `evals/cases/golden_dataset.jsonl` — 173 cases, 100 article-cited / 7
 
 ---
 
+### run_15_toc2 — 2026-03-24
+
+**Workers:** 1 · **Judge:** disabled
+
+**Configuration (changes vs run_12):**
+- `USE_TOC_ROUTING=true` with parallel execution and fixed timeout (prior run_7 was confounded by sequential blocking)
+- Qdrant payload indexes active (`part`, `title`, `chapter`, `section`)
+
+**Metrics:**
+
+| Metric | Value | Δ vs run_12 |
+|--------|-------|-------------|
+| Hit@1 | 76.3% | −1.7pp |
+| Recall@3 | 80.2% | +1.0pp |
+| MRR | 0.824 | 0.000 |
+
+**By type (key deltas):**
+- `multi_article`: +9.4pp ✅
+- `false_friend`: +7.1pp ✅
+- `diluted_embedding` Recall@3: +37.5pp ✅
+- `liquidity`: −7.4pp ❌
+- `own_funds`: −6.5pp ❌
+- `threshold`: −7.1pp ❌
+
+**Verdict:** Selective routing needed — universal ToC firing hurts dense-strong categories. Retired. Gains suggest query-type classifier could unlock ToC for specific slices.
+
+---
+
+### run_16_toc_confidence — 2026-03-24
+
+**Workers:** 1 · **Judge:** disabled
+
+**Configuration (changes vs run_12):**
+- Selective ToC routing: fires only when max reranker confidence score < 0.55
+
+**Metrics:**
+
+| Metric | Value | Δ vs run_12 |
+|--------|-------|-------------|
+| Hit@1 | 77.5% | −0.5pp |
+| Recall@3 | 79.2% | 0.000 |
+| MRR | 0.821 | −0.003 |
+
+**Verdict:** Confidence threshold too blunt — ToC still fires on cases where retrieval is actually fine. Net regression vs run_12. ToC routing retired.
+
+---
+
+### run_17_para_window — 2026-03-24 ⭐
+
+**Workers:** 1 · **Judge:** disabled
+
+**Configuration (changes vs run_12):**
+- `USE_PARAGRAPH_WINDOW_RERANKER=true`: reranker scores ±1 paragraph neighbours from existing article nodes; best window replaces the article node for context assembly
+- `PARAGRAPH_WINDOW_MAX_WINDOWS=4`
+
+**Metrics:**
+
+| Metric | Value | Δ vs run_12 |
+|--------|-------|-------------|
+| Hit@1 | **80.3%** | **+2.3pp** |
+| Recall@3 | 78.9% | −0.3pp |
+| MRR | **0.840** | **+0.016** |
+
+**By type (key deltas):**
+- `false_friend`: +14.3pp ✅
+- `open_ended`: +4.1pp ✅
+- `negative`: +12.5pp ✅
+- `diluted_embedding`: −16.7pp ❌ (6 cases; acceptable)
+
+**Latency:** +800ms vs run_12
+
+**Verdict:** Best retrieval config to date. Para-window reranker kept permanently.
+
+---
+
+### run_18_contextual_prefix — 2026-03-24
+
+**Workers:** 1 · **Judge:** disabled
+
+**Configuration (changes vs run_17):**
+- Re-ingested with contextual hierarchy prefix prepended to each node's embedding text (e.g. "Part III > Title II > Chapter 2 > Article 92: …")
+- Para-window reranker active
+
+**Metrics:**
+
+| Metric | Value | Δ vs run_17 |
+|--------|-------|-------------|
+| Hit@1 | 80.3% | 0.000 |
+| Recall@3 | 77.8% | −1.1pp |
+| MRR | 0.835 | −0.005 |
+
+**By type (key deltas):**
+- `capital_ratios`: +3.2pp ✅
+- `own_funds`: +3.2pp ✅
+- `ciu_treatment`: −20pp ❌
+- `known_failures`: −8.3pp ❌
+
+**Latency:** +1s vs run_17
+
+**Verdict:** Neutral overall. Prefix on full-article blobs dilutes; gains require paragraph-level chunking. Index retained (prefix harmless).
+
+---
+
+### run_19_para_chunking — 2026-03-24
+
+**Workers:** 1 · **Judge:** disabled
+
+**Configuration (changes vs run_18):**
+- Dual-document index: original article-level index + new paragraph-chunked index
+- `RETRIEVAL_MODE=paragraph_only`: queries only the paragraph-chunked index
+
+**Metrics:**
+
+| Metric | Value | Δ vs run_17 |
+|--------|-------|-------------|
+| Hit@1 | 70.5% | −9.8pp |
+| Recall@3 | 69.6% | −9.3pp |
+| MRR | 0.733 | −0.107 |
+
+**By type (key deltas):**
+- `credit_risk_sa`: +40pp ✅
+- `cash_pooling` / `leverage_ratio`: +100pp ✅ (niche sub-articles)
+- Most other types: heavy regression due to top-k flooding by paragraph fragments
+
+**Verdict:** Paragraph-only flooding kills overall performance. Key insight: mix article + paragraph nodes with a deduplicator → led to run_20.
+
+---
+
+### run_20_mixed_chunking — 2026-03-25 ⭐ CURRENT SOTA
+
+**Workers:** 1 · **Judge:** gpt-4o (partial)
+
+**Configuration (changes vs run_17):**
+- `USE_MIXED_CHUNKING=true`: retrieves from both article-level and paragraph-level collections simultaneously
+- `ArticleDeduplicatorPostprocessor`: collapses paragraph hits to their parent article before context assembly to prevent duplication
+- No re-ingest: uses dual-document index from run_19
+
+**Metrics:**
+
+| Metric | Value | Δ vs run_17 |
+|--------|-------|-------------|
+| Hit@1 | **86.7%** | **+6.4pp** |
+| Recall@3 | **83.6%** | **+4.7pp** |
+| MRR | **0.891** | **+0.051** |
+| Judge Correctness | **0.793** | n/a (vs run_2e: +2.3pp) |
+
+**By type (remaining hard gaps):**
+- `diluted_embedding`: 16.7% Hit@1 (unchanged across all runs)
+- `false_friend`: 85.7% Hit@1, Judge Correctness=0.679 (retrieval solved, synthesis fails)
+- `multi_article` Recall@1: 29.7%
+- `open_ended`: 80.8% Hit@1
+
+**Verdict:** New SOTA. +6.4pp Hit@1 vs run_17 with zero regressions. Mixed chunking + deduplicator is the architecture. All future runs use this as baseline.
+
+---
+
+### run_21_domain_rewrite — 2026-03-25
+
+**Workers:** 1 · **Judge:** disabled
+
+**Configuration (changes vs run_20):**
+- Pre-retrieval query rewrite via gpt-4o-mini: plain-language query → CRR legal register (e.g. "pledged bonds" → "collateralised by central government securities per Art. 411")
+- Targets `diluted_embedding` (16.7% Hit@1 unchanged through all prior runs)
+
+**Metrics:**
+
+| Metric | Value | Δ vs run_20 |
+|--------|-------|-------------|
+| Hit@1 | 80.9% | −5.8pp |
+| Recall@3 | 80.4% | −3.2pp |
+| MRR | 0.849 | −0.042 |
+
+**By type (key deltas):**
+- `diluted_embedding`: unchanged at 16.7% ❌
+- `false_friend`: −28.6pp ❌ (rewrite introduces false synonyms)
+- `open_ended`: −12.3pp ❌
+
+**Verdict:** Heavy regression. Rewriting changes query intent for good queries without fixing vocabulary-gap ones. Reverted. Dead end for this approach.
+
+---
+
+### run_22_false_premise_prompt — 2026-03-25
+
+**Workers:** 1 · **Judge:** gpt-4o
+
+**Configuration (changes vs run_20):**
+- Synthesis prompt additions: FALSE PREMISE RULE (explicitly instruct to refute false premises) + CONDITIONAL LOGIC RULE (state conditions rather than binary yes/no)
+- Targets `false_friend` synthesis failures (Judge Correctness=0.679, retrieval already 85.7%)
+
+**Metrics:**
+
+| Metric | Value | Δ vs run_20 |
+|--------|-------|-------------|
+| Hit@1 | 86.7% | 0.000 |
+| Recall@3 | 83.6% | 0.000 |
+| MRR | 0.892 | +0.001 |
+| Judge Correctness | 0.782 | −1.1pp |
+
+**By type (key deltas):**
+- `false_friend` Judge Correctness: 0.679 → 0.557, −12.2pp ❌ (over-hedging)
+- `diluted_embedding`: +8.3pp ✅ (side effect)
+
+**Verdict:** Blanket rules cause over-hedging on false_friend cases. Net regression on the target. Reverted. Next: targeted few-shot examples per Grok Exp 1.
+
+---
+
 ## Summary of Findings
 
 ### What works
-- **Pure cross-encoder reranker** (`ms-marco-MiniLM-L-6-v2`, top_n=6): +0.7pp Hit@1, −1.1s latency vs no-reranker baseline
+- **Mixed ARTICLE+PARAGRAPH retrieval + ArticleDeduplicatorPostprocessor** (run_20): +6.4pp Hit@1, +4.7pp Recall@3 vs run_17 — zero regressions. **Single highest-leverage architectural change.**
+- **Paragraph-window reranker** (`USE_PARAGRAPH_WINDOW_RERANKER=true`, run_17): +2.3pp Hit@1 vs run_12
+- **Adjacent article tiebreaker** (run_12): +1.7pp Hit@1, false_friend +14.3pp
+- **Pure cross-encoder reranker** (`ms-marco-MiniLM-L-6-v2`, top_n=6, run_2): +0.7pp Hit@1, −1.1s latency vs no-reranker baseline
 - **gpt-4o for multi-hop only**: good balance of quality and cost; using gpt-4o for all queries gives +1.2pp judge correctness but 2.3× latency
 - **Hybrid retrieval** (dense + sparse, α=0.5): stable foundation throughout
 
@@ -563,19 +783,22 @@ Dataset: `evals/cases/golden_dataset.jsonl` — 173 cases, 100 article-cited / 7
 - Sub-query fusion: dilutes retrieval scores (−2.8pp Hit@1)
 - Blended reranker (any alpha): net neutral at best, slight regression at worst
 - Article title boost (0.15): noisy — hurts across the board
-- ToC routing: adds latency with no retrieval gain
-- True HyDE: neutral retrieval, adds latency, slight judge regression
+- Universal ToC routing: adds latency, overall regression (selective wins on multi_article + diluted slices but not worth the cost)
+- True HyDE / domain query rewrite: neutral or negative retrieval, adds latency
+- Blanket synthesis prompt rules (FALSE PREMISE RULE): over-hedging — hurt false_friend Judge −12.2pp
+- L-12 reranker: regression overall vs L-6 on this corpus
 
-### Main remaining gap
-Open-ended queries: **61.6% Hit@1** vs 91% for article-cited — a 29pp gap (run_9 numbers, most reliable full-judge run).
-Root causes: terminology dilution (6 cases), concept-in-unexpected-article (5), niche sub-articles (3), known hard (2), plus 12 ranking failures (7 adjacent-article confusion, 4 false-friend).
+### Main remaining gaps (post run_20 SOTA)
 
-### What doesn't work (updated)
-- Dense-heavy alpha (0.7): does NOT fix diluted_embedding — vocabulary gap too large for higher dense weight alone
-- Wider retrieval pool (TOP_K=20, RERANK_TOP_N=8): does NOT fix false_friend ranking failures
+| Gap | Hit@1 | Judge Correctness | Root cause |
+|-----|-------|-------------------|------------|
+| `diluted_embedding` | 16.7% | — | Query vocabulary ≠ CRR article vocabulary (TREA, pledged bonds, etc.) — unchanged across ALL runs |
+| `false_friend` synthesis | 85.7% | 0.679 | Retrieval works; model fails to refute false premise |
+| `multi_article` Recall@1 | 29.7% | 0.644 | Cross-ref expansion too conservative; secondary articles missed |
+| `open_ended` | 80.8% | — | Mixed query types; classification + routing would help |
 
 ### Target metrics
-Hit@1 ≥ 90% · Judge Correctness ≥ 0.85 — **current gap: Hit@1=78.6% (run_9), Judge Correctness=0.779**
+Hit@1 ≥ 90% · Judge Correctness ≥ 0.85 — **current gap: Hit@1=86.7% (run_20, no judge), Judge Correctness=0.793 (run_20, partial judge)**
 
 ---
 
@@ -595,82 +818,105 @@ python -m evals.run_eval --run-name <run_name> --workers 4 --judge --judge-model
 
 ---
 
-## Planned Experiments
+## Completed Experiments (quick reference)
 
-Failure analysis of run_2c (36 persistent failures across all runs) identifies two structurally distinct problems requiring different fixes.
-
-### Failure mode A — Retrieval failure (right article never surfaces)
-- `diluted_embedding` (6 cases, 33% Hit@1): query vocabulary ≠ article vocabulary. "enterprise" → article says "corporate". BM25 has no signal; dense embeddings must bridge the gap alone.
-- `credit_risk_sa` (5 cases, 40% Hit@1): same root cause — plain-language queries for CRR-specific legal terms.
-
-### Failure mode B — Ranking failure (right article retrieved, wrong rank)
-- `false_friend` (14 cases, 50% Hit@1, Recall@5=81%): correct article IS in top-5 but ranked below an adjacent look-alike. A reranker/scoring problem.
-
----
-
-### ~~run_9~~ — COMPLETED (see run details above)
-
-Results: neutral. alpha=0.7 did not help diluted_embedding; wider pool did not fix false_friend.
-
----
-
-### ~~run_10~~ — COMPLETED (results unreliable — see notes)
-
-**Outcome:** Broad synonyms caused regressions (case_152 Recall@3 1.0→0.0, case_136 hit 1→0). Run was also confounded by server not restarted: 3 × http_504 at ~122s (old 120s timeout still active). Broad mappings rolled back; surgical-only kept. Full re-test via run_10b.
-
-**Rolled back:** `company`, `companies`, `minimum capital`, `capital floor`, `total exposure`
-
-**Kept:** `local authority`, `local public authority`, `pledged assets`, `pledged collateral`, `core capital`
+| Run | Key change | Verdict |
+|-----|-----------|---------|
+| run_9 | ALPHA=0.7, TOP_K=20, RERANK_TOP_N=8 | Neutral retrieval, +1.9pp judge. Params reverted. |
+| run_10 | Broad synonyms | Regressions. Broad rolled back; surgical kept. |
+| run_2e | Clean judge reference baseline | ⭐ 173/173, Judge Correctness=0.770. |
+| run_12 | Adjacent article tiebreaker δ=0.05 | ⭐ +1.7pp Hit@1, false_friend +14.3pp. Kept. |
+| run_13 | L-12 reranker | Regression −1.15pp. L-6 retained. |
+| run_15 | Universal ToC routing | Overall regression; selective gains on multi_article/diluted. Retired. |
+| run_16 | Selective ToC (confidence <0.55) | Still regression vs run_12. Retired. |
+| run_17 | Para-window reranker | ⭐ +2.3pp Hit@1. Kept. |
+| run_18 | Contextual prefix (re-ingest) | Neutral. Gains gated on para chunking. Index kept. |
+| run_19 | Para-only retrieval | Regression (flooding). Led to mixed-chunking insight. |
+| run_20 | Mixed ARTICLE+PARA + ArticleDeduplicator | ⭐ **New SOTA +6.4pp, zero regressions.** |
+| run_21 | Domain query rewrite (gpt-4o-mini) | Regression −5.8pp. Reverted. Dead end. |
+| run_22 | FALSE PREMISE + CONDITIONAL LOGIC prompt rules | Over-hedging; false_friend −12.2pp judge. Reverted. |
 
 ---
 
-### ~~run_2e~~ — COMPLETED ⭐ Reference baseline
+## Planned Experiments (post run_20 SOTA)
 
-**Outcome:** 173/173 cases, 0 failures. Hit@1=76.3%, MRR=0.815, Judge Correctness=0.770. Confirmed surgical synonyms already active. Workers=1 resolved the 4 timeout failures seen in run_2d (workers=4). **This is the judge reference for all subsequent runs.**
-
----
-
-### ~~run_10b~~ — SUPERSEDED by run_2e
-
-**Outcome:** run_2e already ran with USE_ENRICHMENT=True and all surgical synonyms active — run_10b as a separate experiment would have been identical to run_2e. No separate run needed.
+Source: Grok analysis (2026-03-25). Reference baseline: **run_20** — Hit@1=86.7%, Judge Correctness=0.793. Target: Hit@1 ≥ 90%, Judge Correctness ≥ 0.85. All experiments require no re-ingest; ordered by expected impact × feasibility.
 
 ---
 
-### ~~run_12~~ — COMPLETED ⭐ Adjacent article tiebreaker
+### run_23 — Targeted few-shot false-premise synthesis (Grok Exp 1)
 
-**Outcome:** Hit@1=78.0% (+1.7pp vs run_2e), MRR=0.824 (+0.009), `false_friend` Hit@1=50.0% (+14.3pp), `open_ended` Hit@1=61.6% (+4.1pp). No meaningful regressions. **Tiebreaker kept permanently at ADJACENT_TIEBREAK_DELTA=0.05.**
+**Priority:** High · **Effort:** Low · **Re-ingest:** No
 
----
+**Hypothesis:** Replace the blanket FALSE PREMISE RULE (run_22 — failed due to over-hedging) with 3–4 hand-crafted few-shot examples drawn directly from the 14 `false_friend` golden cases. Add the guard: "Apply only when premise clearly contradicts CRR text; otherwise answer normally."
 
-### ~~run_13~~ — COMPLETED L-12 reranker (reverted)
+**Target gap:** `false_friend` Judge Correctness (currently 0.557 post-run_22, 0.679 at run_20 baseline). Retrieval already 85.7% Hit@1 — synthesis is the bottleneck.
 
-**Config:** `RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-12-v2`, all other params identical to run_12.
+**Expected mechanism:** Few-shot examples teach nuance (refute + cite correct article + state actual requirement) without universal hedging. Should lift false_friend Judge ≥+0.15pp while preserving overall correctness.
 
-**Metrics:**
+**Implementation:** Prompt edit in synthesis template only. Ablation: full judge eval vs run_20; isolate delta on `false_friend` + overall Judge Correctness.
 
-| Metric | run_12 (L-6) | run_13 (L-12) | Δ |
-|--------|-------------|---------------|---|
-| Hit@1 | 78.03% | 76.88% | −1.15pp |
-| Recall@3 | 79.19% | 78.76% | −0.43pp |
-| Recall@5 | 82.42% | 82.85% | +0.43pp |
-| MRR | 0.8237 | 0.8219 | −0.002 |
-| p50 latency | 9.2s | 10.3s | +1.1s |
-
-**By type (key deltas):**
-- `false_friend`: +7.1pp (50.0% → 57.1%) ✅
-- `diluted_embedding`: −16.6pp (33.3% → 16.7%) ❌
-- `definition`: −3.9pp (96.2% → 92.3%) ❌
-- `easy`: −4.3pp (93.6% → 89.4%) ❌
-
-**Verdict:** Regression overall (−1.15pp Hit@1, +1.1s latency). L-12's `false_friend` gain is real but offset by regressions on easy/definition/diluted_embedding. L-6 retained. `.env` reverted.
+**Risk:** Very low. Single-article and definition slices (>90% Hit@1) unaffected. Tiny risk of over-refutation on 2 ambiguous cases.
 
 ---
 
-### run_11 — Sparse-heavy alpha (diagnostic)
+### run_24 — Recursive top-3 cross-reference expansion (Grok Exp 2)
 
-**Hypothesis:** Counter-test to run_9. Try RETRIEVAL_ALPHA=0.3 (more BM25 weight) to understand alpha sensitivity. May help article-cited queries; likely hurts open-ended.
+**Priority:** High · **Effort:** Medium · **Re-ingest:** No
 
-**Config:** `RETRIEVAL_ALPHA=0.3` (all other params at baseline). Low priority — diagnostic value only.
+**Hypothesis:** Current expansion: top-2 primary nodes → fetch referenced articles. Change to: top-3 primary nodes → recursively fetch 1st-level references (max 5 additional nodes total) → joint cross-encoder rerank + ArticleDeduplicator.
+
+**Target gap:** `multi_article` Recall@1=29.7%, `multi_hop` Judge=0.7375. CRR is heavily referential; surfacing secondary articles earlier in the reranker pool will boost secondary recall.
+
+**Expected mechanism:** Metadata `referenced_articles` already exists — expansion is a code change in the retrieval postprocessor, not an ingest change.
+
+**Implementation:** Update postprocessor in retrieval pipeline. Ablation: retrieval-only run (no judge); measure Recall@1 and MRR on `multi_article` + `multi_hop` slices vs run_20.
+
+**Risk:** Low-moderate. Securitisation and liquidity (cross-ref dense) may see minor top-k dilution, but deduplicator + reranker should neutralise. Single-article slices unaffected.
+
+---
+
+### run_25 — Static CRR jargon synonym expansion BM25-only (Grok Exp 3)
+
+**Priority:** High · **Effort:** Low-Medium · **Re-ingest:** No
+
+**Hypothesis:** Build a static map (~30–50 entries) from golden `diluted_embedding` failures + Art 4 definitions (e.g. "pledged government bonds" ↔ "collateralised by government bonds / Art 411", "TREA" ↔ "total risk exposure amount / Art 92", "profit and loss transfer agreement" ↔ "P&L transfer / Art 28"). Expand **only the BM25 query string** with OR-ed synonyms; vector search unchanged.
+
+**Target gap:** `diluted_embedding` (16.7% Hit@1 — unchanged across ALL prior runs). Also targets `open_ended` (80.8%).
+
+**Expected mechanism:** Boosts BM25 signal for jargon mismatches; RRF fusion lifts relevant nodes into top-15 without touching dense embeddings. Expected +20–30pp on diluted_embedding.
+
+**Implementation:** One-time synonym map + query preprocessor edit. Ablation: retrieval-only run; compare Hit@1/Recall@3 on `diluted_embedding` + `open_ended` vs run_20.
+
+**Risk:** Low. BM25-only change leaves vector scores untouched. Surgical scope (specific jargon terms only, no broad expansions like run_10).
+
+---
+
+### run_26 — Query-type classifier + adaptive retrieval strategy (Grok Exp 4)
+
+**Priority:** Medium · **Effort:** Medium · **Re-ingest:** No
+
+**Hypothesis:** Add a one-shot gpt-4o-mini classifier (~300 tokens, <1s) at orchestrator start that tags query as `diluted`, `multi_hop`, `open_ended`, or `standard`. Routing: (a) `diluted` → trigger Exp-3 synonym expansion, (b) `multi_hop` → Exp-2 recursive refs, (c) `open_ended` + low reranker confidence (<0.55) → selective ToC pre-filter (cached TOC) + metadata filter on likely Part/Title.
+
+**Target gap:** `open_ended` (80.8%) and `diluted_embedding` (16.7%) — reuses selective-ToC gains from run_15 (multi_article +9.4pp) without universal regression.
+
+**Implementation:** Classifier prompt + if-logic in orchestrator. Ablation: run two variants (classifier on vs always-standard); compare by_question_type + by_citation_type.
+
+**Risk:** Low. Easy/medium slices (n=91) get "standard" path unchanged. Classifier errors affect only hard slice. Requires runs 23+25 as prerequisites for routing targets.
+
+---
+
+### run_27 — Category-aware metadata pre-filter for open_ended (Grok Exp 6)
+
+**Priority:** Medium · **Effort:** Low · **Re-ingest:** No
+
+**Hypothesis:** For classifier-tagged `open_ended` queries, run a tiny gpt-4o-mini category detector ("capital_ratios / own_funds / liquidity / …") and add Qdrant payload filter on `part`/`title` before hybrid retrieval. Article-cited queries bypass the filter entirely.
+
+**Target gap:** `open_ended` (80.8%). Legal hierarchy makes category a strong prior — shrinks search space early → higher precision in top-k.
+
+**Implementation:** Reuse existing payload indexes + classifier from run_26. Ablation: compare `open_ended` Hit@1 and overall MRR vs run_20.
+
+**Risk:** Very low. Only fires on `open_ended` queries.
 
 ---
 
@@ -679,5 +925,6 @@ Results: neutral. alpha=0.7 did not help diluted_embedding; wider pool did not f
 | Experiment | Target | Effort |
 |-----------|--------|--------|
 | 429x sub-article metadata grouping | `leverage_ratio_cash_pooling` (0% Hit@1, 3 niche sub-articles) | High |
-| Structural ref extraction (Part/Title/Chapter) | Cross-ref expansion completeness | High |
+| Structural ref extraction (Part/Title/Chapter refs) | Cross-ref expansion completeness | High |
 | Embedding model swap (multilingual-e5-large-instruct) | Diluted embedding + overall quality | High |
+| BGE-reranker-v2-m3 (if CPU-compatible) | Stronger reranker for nuanced legal distinctions | Medium |

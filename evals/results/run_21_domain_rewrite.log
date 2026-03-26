@@ -1,0 +1,35 @@
+2026-03-25 01:12:18,762  INFO      ============================================================
+2026-03-25 01:12:18,762  INFO      CRR Eval Runner
+2026-03-25 01:12:18,762  INFO        run     : run_21_domain_rewrite
+2026-03-25 01:12:18,762  INFO        dataset : evals\cases\golden_dataset.jsonl
+2026-03-25 01:12:18,762  INFO        api     : http://localhost:8080
+2026-03-25 01:12:18,762  INFO        output  : evals\results\run_21_domain_rewrite_cases.jsonl
+2026-03-25 01:12:18,763  INFO        workers : 4
+2026-03-25 01:12:18,763  INFO        dry-run : False
+2026-03-25 01:12:18,763  INFO        judge   : False
+2026-03-25 01:12:18,764  INFO        git     : c28385a
+2026-03-25 01:12:18,764  INFO        note    : Domain query rewriting: rewrite plain-language queries into CRR  legal register before embedding. Targets diluted_embedding failures.
+2026-03-25 01:12:18,764  INFO      ============================================================
+2026-03-25 01:12:18,766  INFO      Loaded 173 cases from evals\cases\golden_dataset.jsonl.
+2026-03-25 01:12:18,766  INFO      173 cases to evaluate.
+2026-03-25 01:12:20,928  INFO      API healthy — index loaded, 5979 vector store items.
+2026-03-25 01:18:59,002  INFO        retry 1/2 for case_166 in 5s…
+2026-03-25 01:19:28,997  INFO        retry 1/2 for case_148 in 5s…
+2026-03-25 01:19:48,037  INFO        retry 1/2 for case_153 in 5s…
+2026-03-25 01:20:59,487  INFO        retry 1/2 for case_167 in 5s…
+2026-03-25 01:21:13,740  INFO      
+2026-03-25 01:21:13,741  INFO      ============================================================
+2026-03-25 01:21:13,741  INFO      Run complete: run_21_domain_rewrite
+2026-03-25 01:21:13,741  INFO        Cases: 173 ok / 0 failed / 173 total
+2026-03-25 01:21:13,741  INFO        Hit@1:      80.9%
+2026-03-25 01:21:13,742  INFO        Recall@3:   80.3%
+2026-03-25 01:21:13,742  INFO        Recall@5:   82.8%
+2026-03-25 01:21:13,742  INFO        MRR:        0.849
+2026-03-25 01:21:13,742  INFO      
+2026-03-25 01:21:13,742  INFO        --- By citation type ---
+2026-03-25 01:21:13,743  INFO        article_cited  (n=100)  Hit@1=90.0%  Recall@3=85.8%  MRR=0.905
+2026-03-25 01:21:13,743  INFO        open_ended     (n=73)  Hit@1=68.5%  Recall@3=72.8%  MRR=0.773
+2026-03-25 01:21:13,743  INFO      
+2026-03-25 01:21:13,743  INFO        P50 latency: 8546 ms
+2026-03-25 01:21:13,744  INFO        Summary → evals\results\run_21_domain_rewrite_summary.json
+2026-03-25 01:21:13,744  INFO      ============================================================

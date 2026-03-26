@@ -39,6 +39,7 @@ from src.query.query_engine import (
     _normalise_query,
     _enrich_open_ended_query,
     _generate_hyde_query,
+    _rewrite_query_crr_domain,
     _generate_sub_queries,
     merge_rrf,
 )
@@ -318,13 +319,21 @@ class QueryOrchestrator:
         # For open-ended CRR_SPECIFIC queries (no article reference): enrich with article hints.
         retrieve_query = effective_query
         is_multi_hop = bool(_MULTI_HOP_RE.search(effective_query))
+        _use_domain_rewrite = os.getenv("USE_DOMAIN_QUERY_REWRITE", "false").lower() == "true"
         _use_hyde   = os.getenv("USE_HYDE", "false").lower() == "true"
         _use_enrich = os.getenv("USE_QUERY_ENRICHMENT", "true").lower() == "true"
         if (
             classification.query_type == QueryType.CRR_SPECIFIC
             and not _detect_direct_article_lookup(_normalise_query(effective_query))
         ):
-            if _use_hyde:
+            if _use_domain_rewrite:
+                # Domain query rewriting: rewrite the query into CRR legal register before
+                # embedding. Unlike HyDE (long hypothetical passage), this produces a concise
+                # rewritten question that maps plain-language terms to exact CRR vocabulary
+                # (e.g. "pledged bonds" → "encumbered assets"). Targets terminology dilution
+                # failures where query and article share few tokens.
+                retrieve_query = _rewrite_query_crr_domain(effective_query, self._api_key)
+            elif _use_hyde:
                 # True HyDE: generate a hypothetical CRR-style passage + article hints.
                 # Embeds legal vocabulary rather than the plain-language query, targeting
                 # terminology dilution failures where query and article text share few tokens.
@@ -350,11 +359,11 @@ class QueryOrchestrator:
                     type(exc).__name__, exc,
                 )
                 all_nodes, sources, trace_id, norm_query, _eng = self._engine.retrieve(
-                    retrieve_query, lang, max_cross_ref_expansions
+                    retrieve_query, lang, max_cross_ref_expansions, is_multi_hop=True
                 )
         else:
             all_nodes, sources, trace_id, norm_query, _eng = self._engine.retrieve(
-                retrieve_query, lang, max_cross_ref_expansions
+                retrieve_query, lang, max_cross_ref_expansions, is_multi_hop=is_multi_hop
             )
 
         # Post-retrieval ToC supplement: only fires when retrieval confidence is low.
@@ -498,13 +507,18 @@ class QueryOrchestrator:
         retrieve_query = effective_query
         is_multi_hop_stream = bool(_MULTI_HOP_RE.search(effective_query))
         is_direct_article_stream = _detect_direct_article_lookup(_normalise_query(effective_query))
+        _use_domain_rewrite_stream = os.getenv("USE_DOMAIN_QUERY_REWRITE", "false").lower() == "true"
         _use_hyde_stream   = os.getenv("USE_HYDE", "false").lower() == "true"
         _use_enrich_stream = os.getenv("USE_QUERY_ENRICHMENT", "true").lower() == "true"
         if (
             classification.query_type == QueryType.CRR_SPECIFIC
             and not is_direct_article_stream
         ):
-            if _use_hyde_stream:
+            if _use_domain_rewrite_stream:
+                retrieve_query = await asyncio.to_thread(
+                    _rewrite_query_crr_domain, effective_query, self._api_key
+                )
+            elif _use_hyde_stream:
                 retrieve_query = await asyncio.to_thread(
                     _generate_hyde_query, effective_query, self._api_key
                 )
@@ -631,7 +645,7 @@ class QueryOrchestrator:
 
         for i, q in enumerate([main_query] + sub_queries):
             try:
-                nodes, _sources, tid, nq, _ = self._engine.retrieve(q, lang, max_expansions)
+                nodes, _sources, tid, nq, _ = self._engine.retrieve(q, lang, max_expansions, is_multi_hop=True)
                 if i == 0:
                     trace_id = tid
                     norm_query = nq

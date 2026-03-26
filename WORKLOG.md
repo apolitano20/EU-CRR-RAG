@@ -4,15 +4,25 @@ For completed work history, see `COMPLETED.md`.
 
 ---
 
-## Current State (as of 2026-03-25) ✅ MIXED CHUNKING — run_20 is new SOTA | branch: ingest_contextual_prefix → merging to main
+## Current State (as of 2026-03-26) — run_27 is SOTA
 
-Best eval run: **run_20_mixed_chunking** — Hit@1=**86.7%**, Recall@3=83.6%, MRR=0.891, mean latency ~10.5s (no judge). **New SOTA.**
-Best run with judge: **run_2e_baseline** — Hit@1=76.3%, MRR=0.815, Judge Correctness=0.770, Judge Faithfulness=0.790. (judge run on run_20 config pending)
-Config: `USE_MIXED_CHUNKING=true`, `USE_PARAGRAPH_WINDOW_RERANKER=true`, `PARAGRAPH_WINDOW_MAX_WINDOWS=4`, `cross-encoder/ms-marco-MiniLM-L-6-v2`, top_n=6, `RETRIEVAL_TOP_K=15`, `RETRIEVAL_ALPHA=0.5`, `TITLE_BOOST_WEIGHT=0`, `ADJACENT_TIEBREAK_DELTA=0.05`, `USE_TOC_ROUTING=false`, `gpt-4o-mini` (standard) + `gpt-4o` (multi-hop via orchestrator).
+**Best run: run_27_completeness** — Hit@1=**87.3%**, Judge Correctness=**0.812**, Judge Completeness=**0.813**, Judge Faithfulness=**0.841**.
+Config: `USE_ARTICLE_GRAPH=true`, `USE_MIXED_CHUNKING=true`, `USE_PARAGRAPH_WINDOW_RERANKER=true`, `PARAGRAPH_WINDOW_MAX_WINDOWS=4`, `RETRIEVAL_TOP_K=15`, `RETRIEVAL_ALPHA=0.5`, `TITLE_BOOST_WEIGHT=0`, `ADJACENT_TIEBREAK_DELTA=0.05`, `USE_TOC_ROUTING=false`, `gpt-4o-mini` (standard) + `gpt-4o` (hard queries).
+
+**Active synthesis additions (run_26 + run_27):**
+- `_FALSE_PREMISE_RULE` in both prompt templates (3 grounding examples)
+- `_SYNONYM_MAP` run_26 additions (8 entries targeting `diluted_embedding`)
+- `_build_key_facts_block()` — deterministic threshold preamble prepended to context
+- `_append_missing_thresholds()` — post-generation deterministic completeness check
 
 **Next experiment candidates:**
-- run_20 judge — enable `--judge` for comparable judge scores vs run_2e baseline (Judge Correctness=0.770).
-- Diluted embedding fix — remaining weak spot (hit@1=0.17 unchanged across all runs). Needs HyDE or alternative approach.
+
+| # | Run | Target | Approach | Effort | Re-ingest |
+|---|-----|--------|---------|--------|-----------|
+| 1 | run_28 | synthesis quality — model swap | Switch synthesis LLM to Claude Sonnet + switch judge to Claude (avoids GPT self-preference bias). Clean new baseline, not directly comparable to prior runs. | Medium | No |
+| 2 | run_28 alt | `capital_ratios` / `large_exposures` retrieval | Reranker upgrade: `BAAI/bge-reranker-v2-m3` (560MB, multilingual, legal-domain). Re-enable `USE_RERANKER=true`. Latency impact must be validated first (retrieval-only ablation). | Medium | No |
+| 3 | run_29 | `diluted_embedding` (remaining 4/6 misses) | Embedding model swap (`multilingual-e5-large-instruct`). Root-cause fix for vocabulary gap. Requires re-ingest. | High | Yes |
+| 4 | — | `multi_hop` synthesis (still 10 stubborn cases) | Investigate case_018, 124, 127, 143 individually — likely need cross-article reasoning instruction or chain-of-thought synthesis for complex multi-hop. | Low-Medium | No |
 
 ---
 
@@ -43,7 +53,14 @@ All runs on 173-case golden dataset, judge enabled (gpt-4o).
 | **run_17_para_window** | 2026-03-24 | **80.3%** | 78.9% | **0.840** | — | Paragraph-window reranker: +2.3pp Hit@1 vs run_12. false_friend +14.3pp, open_ended +4.1pp, negative +12.5pp. diluted_embedding -16.7pp (6 cases only). +800ms latency. **Current best.** |
 | run_18_contextual_prefix | 2026-03-24 | 80.3% | 77.8% | 0.835 | — | Contextual hierarchy prefix in embedding text (Codex rank 2). Neutral overall vs run_17. ciu_treatment -20pp, known_failures -8.3pp. capital_ratios +3.2pp, own_funds +3.2pp. +1s latency. Prefix on full-article blobs insufficient — gains gated on paragraph chunking. |
 | run_19_para_chunking | 2026-03-24 | 70.5% | 69.6% | 0.733 | — | Para-chunked dual-doc index, PARAGRAPH-only retrieval. Regression overall — top-k flooding. Gains on localized queries (credit_risk_sa +40pp, cash_pooling +100pp). Led to mixed-chunking insight. |
-| **run_20_mixed_chunking** | 2026-03-25 | **86.7%** | **83.6%** | **0.891** | — | Mixed ARTICLE+PARAGRAPH retrieval + ArticleDeduplicatorPostprocessor. No re-ingest. **New SOTA — beats run_17 by +6.4pp Hit@1, +4.7pp Recall@3, +5.1pp MRR. Zero regressions.** |
+| **run_20_mixed_chunking** | 2026-03-25 | **86.7%** | **83.6%** | **0.891** | **0.793** | Mixed ARTICLE+PARAGRAPH retrieval + ArticleDeduplicatorPostprocessor. No re-ingest. **New SOTA — beats run_17 by +6.4pp Hit@1, +4.7pp Recall@3, +5.1pp MRR. Zero regressions.** Judge Correctness +2.3pp vs run_2e. |
+| run_21_domain_rewrite | 2026-03-25 | 80.9% | 80.4% | 0.849 | — | Domain query rewriting (plain-language → CRR legal register via GPT-4o-mini). Hit@1 −5.8pp vs run_20. diluted_embedding unchanged (16.7%). Regression across most categories. **Reverted.** |
+| run_22_false_premise_prompt | 2026-03-25 | 86.7% | 83.6% | 0.892 | 0.782 | Synthesis prompt: FALSE PREMISE RULE + CONDITIONAL LOGIC RULE. Overall correctness −1.1pp. false_friend −12.2pp (0.679→0.557) — over-hedging. diluted_embedding +8.3pp. Net regression on target slice. **Reverted.** |
+| run_23_eval_fix | 2026-03-26 | 86.7% | 83.6% | 0.891 | — | Measurement fix: `_with_expanded` metrics added to eval. Confirmed multi_article gap mostly measurement artifact (recall@3 83.3% with_expanded vs 38.9% raw). |
+| run_24_article_graph (judged) | 2026-03-26 | 86.7% | 83.6% | 0.891 | 0.787 | Article graph BFS expansion. Multi faithfulness +6.9pp, multi_hop faithfulness +5.4pp, own_funds/leverage strong gains. Single-article −1.1pp correctness, large_exposures −4.3pp, negative −6.2pp faithfulness. `is_multi_hop` regex only 6% coverage — unusable. Fix: gate on ≥2 retrieved articles → run_25. |
+| run_25_graph_gated | 2026-03-26 | 86.7% | 83.9% | 0.891 | 0.763 | Graph gated on ≥2 distinct retrieved articles. Statistically identical to run_24 on all metrics — wash. |
+| run_26_synonym_falsepremise | 2026-03-26 | 87.3% | 83.9% | 0.897 | 0.792 | BM25 synonym expansion (8 entries) + false premise rule w/ 3 examples. `false_friend` Judge Correctness +0.20 (0.557→0.757). `diluted_embedding` Hit@1 1/6→2/6. **New SOTA.** |
+| **run_27_completeness** | 2026-03-26 | **87.3%** | **83.9%** | **0.897** | **0.812** | Deterministic completeness: threshold preamble (Part A) + post-generation diff (Part B). 7/17 target cases improved, 0 regressed. Judge Completeness +2.5pp, Faithfulness +2.3pp. **Current SOTA.** |
 
 Codex Dashboard Review 2 hang fixes applied 2026-03-20: eval runner `as_completed` hang fixed (replaced with `wait()` polling loop + `shutdown(wait=False)`); `/api/query` converted to async with `asyncio.to_thread` + `asyncio.wait_for` (504 on timeout); BGE-M3 `_encode_lock` added to serialize CPU encodes; `--auto-start-api` stdout pipe bug fixed (DEVNULL).
 
@@ -138,7 +155,9 @@ Root causes of the 12 ranking failures:
 | 2 | **Article title boost** — boost matching nodes pre-rerank based on article title / query token overlap. | 4 concept-in-unexpected failures | Low | No | ✅ Tried (run_5): hurt across the board. `TITLE_BOOST_WEIGHT=0`. |
 | 3 | **Adjacent article tiebreaker** — when two adjacent articles score within 0.05 of each other, prefer the one whose title more closely matches query keywords. | 7 ranking failures | Low | No | ✅ **DONE (run_12): +1.7pp Hit@1, false_friend +14.3pp. Kept.** |
 | 4 | **429x sub-article metadata** — add `sub_article_of` field to group 429/429a/429b/429c/429e. | 3 niche sub-article failures | Medium | Yes | ⬜ Not started |
-| 5 | **run_18: judge run on run_17 config** — run full eval with judge enabled on current best config (para-window reranker) to get comparable judge scores vs run_2e baseline. | — | Low | No | ⬜ Next up |
+| 5 | **run_18: judge run on run_17 config** — run full eval with judge enabled on current best config (para-window reranker) to get comparable judge scores vs run_2e baseline. | — | Low | No | ✅ Superseded — run_20 judge complete (Correctness=0.793). |
+| 6 | **Domain query rewriting** — rewrite plain-language query into CRR legal register before embedding. | 6 diluted_embedding failures | Low | No | ✅ Tried (run_21): Hit@1 −5.8pp vs run_20. diluted_embedding unchanged. **Regression — reverted.** |
+| 7 | **False premise + conditional logic prompt rules** — explicit instructions to refute false premises and state conditions. | 14 false_friend cases | Low | No | ✅ Tried (run_22): false_friend −12.2pp (over-hedging), diluted_embedding +8.3pp. Net regression on target. **Reverted.** |
 
 ### Codex Architectural Review Uplift — ✅ COMPLETE (no-re-ingest phases, branch: `codex_uplift`)
 

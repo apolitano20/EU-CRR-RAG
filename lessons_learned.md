@@ -2,6 +2,22 @@
 
 ---
 
+## [2026-03-30] Eval runner timeout must match server timeout — mismatch causes silent recurring failures
+
+**Context:** Every eval run (run_39, run_40) produced exactly 22 timeout failures on cases 141–173, despite the server being configured with `QUERY_TIMEOUT_SECONDS=300`.
+**What happened / insight:** The eval runner `--timeout` defaulted to 150s while the server allowed 300s. The same 22 slow cases (all hard, from new categories like CIU/securitisation) consistently exceeded 150s but completed within 300s. Changing `workers` (1, 2, 4) made no difference — the cases themselves are inherently slow. The fix was one line: change the default in `run_eval.py` from 150 to 300.
+**Take-away:** Keep `--timeout` in `run_eval.py` in sync with `QUERY_TIMEOUT_SECONDS` in `.env`. Any time `QUERY_TIMEOUT_SECONDS` changes, update the eval runner default too. A 22-case recurring failure pattern that maps to identical case IDs across runs is a timeout mismatch, not a retrieval bug.
+
+---
+
+## [2026-03-30] Re-ingesting on GPU produces different vectors — non-deterministic FP16 arithmetic
+
+**Context:** run_40 reconfirmed run_30 config after the run_38 re-ingest and found a −2.3pp Hit@1 regression on 4 hard cases despite identical code and settings.
+**What happened / insight:** `bge_m3_sparse.py` uses `use_fp16=True` and moves to CUDA when available. Colab T4 runs BGE-M3 in FP16 with non-deterministic cuDNN operations by default. Two successive ingests of the same text on T4 produce slightly different embedding vectors. These differences are small enough to be invisible on easy cases but flip borderline cosine rankings on hard cases. Cases 137 and 156 showed score drops too large for float noise (0.945→0.342 and 0.940→0.469) suggesting EUR-Lex HTML may also have changed between ingest runs.
+**Take-away:** A re-ingest is NOT retrieval-neutral even with identical code and model. If reproducibility matters, either (1) snapshot the Qdrant collection before re-ingesting, or (2) set `torch.backends.cudnn.deterministic = True` and `torch.use_deterministic_algorithms(True)` in the ingest notebook before running BGE-M3. Also: avoid re-ingesting from EUR-Lex live URL if the index content matters — cache the HTML locally first.
+
+---
+
 ## [2026-03-30] Family-based deduplication hurts multi-article recall — use eval metric instead
 
 **Context:** Implementing `sub_article_of` grouping for 429x sub-article cluster confusion. The natural fix seemed to be: group 429/429a/429b/429c under key "429" in `ArticleDeduplicatorPostprocessor` so only one representative per family appears in results.

@@ -590,8 +590,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--output", type=Path, default=DEFAULT_OUTPUT,
                    help="Directory to write results into")
     p.add_argument("--api-url", default=DEFAULT_API)
-    p.add_argument("--timeout", type=int, default=150,
-                   help="Per-request HTTP timeout in seconds (default: 150, must match QUERY_TIMEOUT_SECONDS)")
+    p.add_argument("--timeout", type=int, default=300,
+                   help="Per-request HTTP timeout in seconds (default: 300, must match QUERY_TIMEOUT_SECONDS)")
     p.add_argument("--workers", type=int, default=1,
                    help="Parallel workers (1 = sequential)")
     p.add_argument("--limit", type=int, default=None,

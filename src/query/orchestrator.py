@@ -68,6 +68,16 @@ _HARD_QUERY_MODEL = os.getenv("HARD_QUERY_MODEL", "gpt-4o")
 _TOC_TIMEOUT = float(os.getenv("TOC_ROUTING_TIMEOUT_SECONDS", "10"))
 
 # Patterns that indicate a multi-hop or comparative question spanning multiple articles.
+# Explicit comparison patterns (original):
+#   "relationship between", "difference between", "compare X", "how does X affect/interact/relate to",
+#   "interaction between", "under both", "in conjunction with"
+# Implicit multi-article patterns (added):
+#   "or must it" / "must it do" — procedural obligation questions (often need companion article)
+#   "how would this change" — conditional pivot implying a second scenario / article
+#   "is this (always) the same as" — equivalence question across two regulatory concepts
+#   "under what conditions … and do … differ" — multi-facet eligibility questions
+#   "if … instead" / "if … rather" / "if … alternatively" — conditional alternative scenario
+#   "does this differ" / "does this change" / "does this vary" — asks about variation across articles
 _MULTI_HOP_RE = re.compile(
     r"\b(?:"
     r"relationship\s+between"
@@ -77,6 +87,13 @@ _MULTI_HOP_RE = re.compile(
     r"|interaction\s+between"
     r"|under\s+both"
     r"|in\s+conjunction\s+with"
+    r"|or\s+must\s+it\b"
+    r"|must\s+it\s+do\b"
+    r"|how\s+would\s+this\s+change\b"
+    r"|is\s+this\s+(?:always\s+)?the\s+same\s+as\b"
+    r"|if\s+(?:instead|rather|alternatively)\b"
+    r"|does\s+this\s+(?:change|differ|vary)\b"
+    r"|do\s+the\s+(?:eligibility\s+)?criteria\s+differ\b"
     r")\b",
     re.IGNORECASE,
 )
@@ -351,7 +368,7 @@ class QueryOrchestrator:
             sub_queries = _generate_sub_queries(effective_query, self._api_key)
             try:
                 all_nodes, sources, trace_id, norm_query = self._multi_query_retrieve(
-                    retrieve_query, sub_queries, lang, max_cross_ref_expansions
+                    retrieve_query, sub_queries, lang, max_cross_ref_expansions, cancel=cancel
                 )
             except Exception as exc:
                 logger.warning(
@@ -365,6 +382,10 @@ class QueryOrchestrator:
             all_nodes, sources, trace_id, norm_query, _eng = self._engine.retrieve(
                 retrieve_query, lang, max_cross_ref_expansions, is_multi_hop=is_multi_hop
             )
+
+        # Checkpoint: retrieval (including cross-ref expansion) just completed.
+        if cancel is not None and cancel.is_set():
+            raise TimeoutError("Query cancelled (client timed out after retrieval).")
 
         # Post-retrieval ToC supplement: only fires when retrieval confidence is low.
         # Run_15 showed that universal ToC routing hurts high-confidence categories
@@ -411,11 +432,15 @@ class QueryOrchestrator:
                     max_score, _toc_threshold,
                 )
 
-        # Checkpoint: bail out before synthesis LLM call if the client already timed out.
+        # Checkpoint: bail out before ToC-supplement + context-build if timed out.
         if cancel is not None and cancel.is_set():
-            raise TimeoutError("Query cancelled (client timed out before synthesis).")
+            raise TimeoutError("Query cancelled (client timed out before context build).")
 
         context_str = self._build_context(all_nodes)
+
+        # Checkpoint: bail out before LLM synthesis call if context build was slow.
+        if cancel is not None and cancel.is_set():
+            raise TimeoutError("Query cancelled (client timed out before synthesis).")
         prompt = self._select_prompt(
             classification.query_type, sources, norm_query, context_str, history
         )
@@ -443,6 +468,8 @@ class QueryOrchestrator:
         language: Optional[str],
         history: list[dict],
         max_cross_ref_expansions: Optional[int] = None,
+        cancel: Optional[threading.Event] = None,
+        timeout: Optional[float] = None,
     ) -> AsyncGenerator[str, None]:
         """Async generator that yields SSE-formatted events."""
         import asyncio
@@ -527,13 +554,30 @@ class QueryOrchestrator:
                     _enrich_open_ended_query, effective_query, self._api_key
                 )
 
+        # Checkpoint: bail out before retrieval if client already disconnected.
+        if cancel is not None and cancel.is_set():
+            yield 'data: {"type": "error", "message": "Query cancelled."}\n\n'
+            yield 'data: {"type": "done"}\n\n'
+            return
+
         # Run retrieval first; ToC supplement fires post-retrieval if confidence is low.
-        all_nodes, sources, trace_id, norm_query, _eng = await asyncio.to_thread(
+        # Wrap in wait_for so a hung retrieval will surface as a TimeoutError rather
+        # than holding the stream connection open indefinitely.
+        _retrieve_coro = asyncio.to_thread(
             self._engine.retrieve,
             retrieve_query,
             lang,
             max_cross_ref_expansions,
         )
+        all_nodes, sources, trace_id, norm_query, _eng = await (
+            asyncio.wait_for(_retrieve_coro, timeout=timeout) if timeout else _retrieve_coro
+        )
+
+        # Checkpoint: bail out after retrieval if client disconnected during it.
+        if cancel is not None and cancel.is_set():
+            yield 'data: {"type": "error", "message": "Query cancelled."}\n\n'
+            yield 'data: {"type": "done"}\n\n'
+            return
 
         # Post-retrieval ToC supplement (mirrors sync query() logic).
         _use_toc_stream = (
@@ -585,7 +629,23 @@ class QueryOrchestrator:
                     max_score_stream, _toc_threshold_stream,
                 )
 
-        context_str = self._build_context(all_nodes)
+        # Checkpoint: bail out before context build if client disconnected during ToC routing.
+        if cancel is not None and cancel.is_set():
+            yield 'data: {"type": "error", "message": "Query cancelled."}\n\n'
+            yield 'data: {"type": "done"}\n\n'
+            return
+
+        # Offload to thread: _build_context may do synchronous Qdrant scroll()
+        # calls (_fetch_nodes_direct) in mixed/paragraph chunking mode, which
+        # would otherwise block the event loop.
+        context_str = await asyncio.to_thread(self._build_context, all_nodes)
+
+        # Checkpoint: bail out before LLM synthesis if client disconnected.
+        if cancel is not None and cancel.is_set():
+            yield 'data: {"type": "error", "message": "Query cancelled."}\n\n'
+            yield 'data: {"type": "done"}\n\n'
+            return
+
         prompt = self._select_prompt(
             classification.query_type, sources, norm_query, context_str, history
         )
@@ -627,6 +687,7 @@ class QueryOrchestrator:
         sub_queries: list[str],
         lang: Optional[str],
         max_expansions: Optional[int],
+        cancel: Optional[threading.Event] = None,
     ) -> tuple[list, list, str, str]:
         """Retrieve nodes for main query + sub-queries; merge by score-based deduplication.
 
@@ -644,6 +705,8 @@ class QueryOrchestrator:
         norm_query = _normalise_query(main_query)
 
         for i, q in enumerate([main_query] + sub_queries):
+            if cancel is not None and cancel.is_set():
+                break
             try:
                 nodes, _sources, tid, nq, _ = self._engine.retrieve(q, lang, max_expansions, is_multi_hop=True)
                 if i == 0:

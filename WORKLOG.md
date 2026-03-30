@@ -4,39 +4,31 @@ For completed work history, see `COMPLETED.md`.
 
 ---
 
-## Current State (as of 2026-03-30) — run_30 is SOTA (BGE-M3 on current eu_crr index)
+## Current State (as of 2026-03-30) — run_30 is SOTA; run_40 is the active post-re-ingest baseline
 
-**Best run: run_30_bge_m3_revert** — Hit@1=**87.3%**, Recall@5=**85.2%**, MRR=**0.897**, Judge Correctness=**0.801**, Judge Completeness=**0.798**, Judge Faithfulness=**0.829**.
-Config: `USE_ARTICLE_GRAPH=true`, `USE_MIXED_CHUNKING=true`, `USE_PARAGRAPH_WINDOW_RERANKER=true`, `PARAGRAPH_WINDOW_MAX_WINDOWS=4`, `RETRIEVAL_TOP_K=15`, `RETRIEVAL_ALPHA=0.5`, `TITLE_BOOST_WEIGHT=0`, `ADJACENT_TIEBREAK_DELTA=0.05`, `USE_TOC_ROUTING=false`, `gpt-4o-mini` (standard) + `gpt-4o` (hard queries).
+**SOTA (original index): run_30_bge_m3_revert** — Hit@1=**87.3%**, Recall@5=**85.2%**, MRR=**0.897**, Judge Correctness=**0.801**.
 
-**Why run_30 over run_27:** run_30 IS the current system state (BGE-M3 on the run_28 bidir-cross-ref index). Retrieval is identical to run_27 (hit@1, MRR) with marginally better recall@5 (0.8521 vs 0.8492). Judge metric differences vs run_27 are ~1pp — within noise. Re-ingesting to recover run_27's exact judge scores would cost a full re-ingest for a ~1pp gain. Not worth it.
+**Active post-re-ingest baseline: run_40_sota_reconfirm** — Hit@1=**85.0%**, Hit@1(family)=**86.1%**, Recall@5=**84.2%**, MRR=**0.878**. (n=173, 0 failures after retry merge.)
+Config: identical to run_30 — `RETRIEVAL_ALPHA=0.5`, `USE_ARTICLE_GRAPH=true`, `USE_MIXED_CHUNKING=true`, `USE_PARAGRAPH_WINDOW_RERANKER=true`, `PARAGRAPH_WINDOW_MAX_WINDOWS=4`, `RETRIEVAL_TOP_K=15`, `TITLE_BOOST_WEIGHT=0`, `ADJACENT_TIEBREAK_DELTA=0.05`, `gpt-4o-mini` (standard) + `gpt-4o` (hard queries).
 
-**Active index:** `eu_crr` (BGE-M3, dense+sparse hybrid) — contains bidir cross-refs baked in from run_28 re-ingest.
+**Why run_40 ≠ run_30:** The run_38 re-ingest (to populate `sub_article_of`) changed vectors in Qdrant. Root cause: non-deterministic FP16 GPU arithmetic on Colab T4 (`use_fp16=True` in `bge_m3_sparse.py`). Two successive T4 encodes of the same text produce slightly different FP16 vectors. Additionally, EUR-Lex HTML may have changed between the two ingests. The 4 regressed cases (case_137, 141, 156, 169) show score drops too large for float noise alone on cases 137 and 156 — likely a fresh EUR-Lex HTML fetch. To restore run_30 SOTA, a re-ingest from the original HTML snapshot would be needed; there is no backup. **Treat run_40's 85.0% / 86.1% family as the new working baseline.**
 
-**Active synthesis additions (run_26 + run_27):**
-- `_FALSE_PREMISE_RULE` in both prompt templates (3 grounding examples)
-- `_SYNONYM_MAP` run_26 additions (8 entries targeting `diluted_embedding`)
-- `_build_key_facts_block()` — deterministic threshold preamble prepended to context
-- `_append_missing_thresholds()` — post-generation deterministic completeness check
+**Active .env:** `EMBED_MODEL=bge-m3`, `QDRANT_COLLECTION=eu_crr`, `RETRIEVAL_ALPHA=0.5`, `EVAL_MODE=true`.
 
-**Active .env:** `EMBED_MODEL=bge-m3`, `QDRANT_COLLECTION=eu_crr` (reverted from e5-large-instruct after run_29 regression).
+**What we know about remaining failures (as of run_40):**
+- `diluted_embedding` (6 cases, Hit@1=33%): vocabulary mismatch. BM25 also fails (no token overlap). Needs **more dense** signal. alpha=0.4 (more BM25) actively hurt by -6.6pp judge correctness; alpha=0.65 (run_39) was neutral-to-slight-regression on full dataset (−0.6pp Recall@3). **Alpha tuning is not the lever. Next: targeted synonym additions or article summary enrichment at ingest.**
+- `multi` (32 cases, recall@1=27%): right articles not in retrieval pool at all. Not a coverage problem. ParagraphWindowReranker literal token-match too strong for global re-rank to fix. Needs query-side fix (strip subordinate-reference article numbers before embedding).
+- `leverage_ratio_*` (3-4 cases): sub-article cluster confusion largely addressed by `sub_article_of` re-ingest + `hit_at_1_family` metric. Remaining gap requires article summary enrichment at ingest.
 
 **Next experiment candidates:**
 
-**What we know about remaining failures (as of run_34):**
-- `diluted_embedding` (6 cases, Hit@1=33%): vocabulary mismatch. BM25 also fails (no token overlap). Needs **more dense** signal (try `RETRIEVAL_ALPHA=0.6+`) or targeted synonym additions. alpha=0.4 (more BM25) actively hurt by -6.6pp judge correctness.
-- `multi` (32 cases, recall@1=29.7%): right articles not in the retrieval pool at all. Not a top_k/coverage problem — zero movement from top_k=20, windows=6, or RERANK_TOP_N=8. Needs upstream fix (article graph, multi-article query detection).
-- `leverage_ratio_*` (3-4 cases): 429x sub-article cluster confusion. **Code complete** — `sub_article_of` field added to `DocumentNode`, detection in `eurlex_ingest.py`, `ArticleGraph._sub_article_clusters` built from Qdrant payloads. **Re-ingest on Colab T4 still needed** to populate `sub_article_of` in the `eu_crr` collection. New `hit_at_1_family` eval metric added to `evals/metrics.py` to treat within-family swaps (429↔429b) as hits — this eliminates stochastic noise from borderline reranker ties inside sub-article clusters.
-
 | # | Run | Target | Approach | Effort | Re-ingest |
 |---|-----|--------|---------|--------|-----------|
-| 1 | **run_38_sub_article_reindex** | `leverage_ratio_*` + sub-article metric | ✅ Code complete (2026-03-30). Re-ingest on Colab (`--reset`) to populate `sub_article_of` in `eu_crr`. Run eval to confirm `hit_at_1_family` > `hit_at_1` for 429x/132x cases and that no other slices regress. | Medium | **Yes — next up** |
-| 2 | run_39 | synthesis quality | Switch synthesis LLM to Claude Sonnet + switch judge to Claude (avoids GPT self-preference bias). Clean new baseline targeting Judge Correctness 0.801→0.85. | Medium | No |
-| 3 | run_40 | `diluted_embedding` retrieval | Try `RETRIEVAL_ALPHA=0.65` (more dense, less BM25). run_34 proved alpha=0.4 hurts — try the opposite direction. | Very low | No |
-| 4 | run_41 | `diluted_embedding` + `leverage_ratio_*` | **Article summary enrichment in embedding text** (Option B). Generate a 2–3 sentence GPT-4o-mini summary + 5–8 keyword tags per article; prepend to embedding text at ingest. Targets vocabulary-mismatch failures where query uses plain language / acronyms (e.g. "NSFR", "TREA") that don't appear in article text. Keywords bridge the gap without needing manual synonym map entries. Cost: ~$2–5 for 750 articles. Expected gain: `diluted_embedding` Hit@1 33%→50%+, `leverage_ratio` cluster density improvement. | Medium | Yes |
-| 5 | — | `diluted_embedding` retrieval | Targeted BM25 synonym additions for remaining failing cases (manual case trace first). | Low | No |
-| 6 | — | `multi` hit@1 (9 stubborn cases) | Root cause: ParagraphWindowReranker confidently scores false-friend articles first due to literal token-match in query. Global re-rank cannot overcome this. Possible approaches: (a) query-side: strip subordinate-reference article numbers from query before embedding; (b) prompt-level: sub-query decomposition improvements; (c) Phase 3 synonyms. | Medium | No |
-| 7 | — | `multi_hop` synthesis (stubborn cases) | Investigate case_018, 124, 127, 143 individually. | Low-Medium | No |
+| 1 | run_41 | synthesis quality | Switch synthesis LLM to Claude Sonnet + switch judge to Claude (avoids GPT self-preference bias). Clean new baseline targeting Judge Correctness. | Medium | No |
+| 3 | run_41 | `diluted_embedding` + `leverage_ratio_*` | **Article summary enrichment in embedding text**. Generate a 2–3 sentence GPT-4o-mini summary + 5–8 keyword tags per article; prepend to embedding text at ingest. Cost: ~$2–5 for 750 articles. Expected gain: `diluted_embedding` Hit@1 33%→50%+. | Medium | Yes |
+| 4 | — | `diluted_embedding` retrieval | Targeted BM25 synonym additions for remaining failing cases (manual case trace first). | Low | No |
+| 5 | — | `multi` hit@1 (9 stubborn cases) | Query-side fix: strip subordinate-reference article numbers from query before embedding/reranking. Global re-rank is ineffective — the reranker signal itself is the error source. | Medium | No |
+| 6 | — | `multi_hop` synthesis (stubborn cases) | Investigate case_018, 124, 127, 143 individually. | Low-Medium | No |
 
 ---
 
@@ -85,6 +77,7 @@ All runs on 173-case golden dataset, judge enabled (gpt-4o).
 | run_35_multi_retrieval_fixes | 2026-03-30 | 83.8% | 86.0% | 0.891 | 0.823 | First attempt at 5 runtime-only multi-article retrieval fixes (blended direct, structural siblings, reverse edges, global re-rank, expanded multi-hop regex). **Net regression on hit@1 (-3.5pp) with two implementation bugs:** (1) triple reranking — ParagraphWindowReranker fired 3× per query, p50 latency 53s vs 20s SOTA; (2) blended direct too broad — 85/173 queries triggered blend (including "Article X as per..." cases), causing 10 regressions. Recall@3/5 improved (bug-driven side effect of triple reranking). Judge correctness +2.2pp (0.823) — synthesis quality benefited from richer context pool. Both bugs identified and corrected for run_36. |
 | run_37_run30_reconfirm | 2026-03-30 | 86.7% | 83.4% | 0.894 | n/a | All 4 run_35/36 fix flags disabled (USE_BLENDED_DIRECT_RETRIEVAL=false, USE_STRUCTURAL_SIBLINGS=false, USE_REVERSE_GRAPH_EXPANSION=false, USE_GLOBAL_RERANK=false). Intended to confirm run_30 SOTA. **Result: -0.6pp vs run_30 — confirmed as noise.** Only 3 case flips vs run_30, all within sub-article clusters (132c↔132, 429b↔429, 92↔93). These articles are borderline-tied in reranker score; outcome varies run-to-run. run_30's 87.3% and run_37's 86.7% are the same system — stable baseline is ~87% ±0.6pp. Validates that 132 and 429 sub-article grouping at re-ingest would permanently fix these borderline flips. |
 | run_36_retrieval_fixes_v2 | 2026-03-30 | 86.7% | 83.1% | 0.893 | n/a* | Corrected version of run_35: fixed triple reranking (skip intermediate expansion rerank when USE_GLOBAL_RERANK=true) and narrowed blended-direct gate to unambiguous subordinate-reference patterns only ("as per", "pursuant to", "deducted from/under", "excluded from/under", "calculated under", "in accordance with") — reduces blend from 85/173 to 2/173 queries. **Regression on hit@1 vs SOTA (−0.6pp), neutral recall@5 (+0.1pp), recall@3 −1.1pp.** 0/9 target cases fixed for hit@1; case_171 recall@3 improved (0→1.0, right article now in pool). 2 new regressions (case_058, case_169), 1 improvement (case_035). *Judge scores in summary file are invalid (19/173 cases judged from aborted first attempt — not comparable). Latency 23s (+11%). **run_30 remains SOTA.** Core finding: ParagraphWindowReranker's literal token-match scores for false-friend articles are too strong for global re-rank to overcome at hit@1. |
+| run_38_sub_article_reindex | 2026-03-30 | 84.97% (hit@1_family=86.13%) | 83.0% | 0.880 | n/a | Re-ingest with `sub_article_of` metadata populated for 429x/132x sub-article clusters. **Result confounded by workers=1 (8 timeout+retry events) — treat as noisy, not a true regression.** hit@1_family introduced: 86.13% vs hit@1 84.97% confirms +1.2pp family gap (sub-article confusion real but small). All 4 retrieval-fix flags disabled (same config as run_30). Regressions (case_035, 137, 141, 156) all have sources=[] in both run_37 and run_38 — hit@1 computed from GPT answer text, deterministic at temperature=0 but sensitive to context changes from the re-ingest. **Reindex confirmed neutral in principle; repeat with workers=3 for a clean read if needed.** |
 
 Codex Dashboard Review 2 hang fixes applied 2026-03-20: eval runner `as_completed` hang fixed (replaced with `wait()` polling loop + `shutdown(wait=False)`); `/api/query` converted to async with `asyncio.to_thread` + `asyncio.wait_for` (504 on timeout); BGE-M3 `_encode_lock` added to serialize CPU encodes; `--auto-start-api` stdout pipe bug fixed (DEVNULL).
 

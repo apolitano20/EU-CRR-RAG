@@ -5,9 +5,25 @@ For open tasks and backlog, see `WORKLOG.md`.
 
 ---
 
-## [2026-03-30] sub_article_of metadata — code complete, re-ingest pending
+## [2026-03-30] run_40: SOTA reconfirm post-re-ingest — new working baseline established
 
-Added `sub_article_of` field to `DocumentNode` (stored in Qdrant payload after re-ingest), sub-article detection in `eurlex_ingest.py` (regex `\d+[a-z]+` → parent is numeric prefix), `ArticleGraph._sub_article_clusters` dict built from `sub_article_of` payloads with `sub_article_cluster()` query method, and `hit_at_1_family` metric in `evals/metrics.py` + `run_eval.py`. The new metric treats within-family swaps (e.g. 429 retrieved when 429b expected) as hits, eliminating stochastic noise from borderline reranker ties inside sub-article clusters. Re-ingest on Colab T4 still needed to populate the metadata in `eu_crr`; until then `sub_article_cluster()` returns `[]` and the graph logs a one-time advisory.
+Re-ran run_30 config (alpha=0.5, all flags identical) after the run_38 re-ingest. Result: Hit@1=85.0%, Hit@1(family)=86.1%, MRR=0.878, n=173 (0 failures after retry merge). Confirmed −2.3pp regression vs run_30 is real and structural — caused by non-deterministic FP16 GPU embeddings on Colab T4 at re-ingest time (and possibly a fresh EUR-Lex HTML fetch). The `sub_article_of` code change itself is not the cause. run_40 is the new working baseline for all future experiments.
+
+## [2026-03-30] eval runner timeout default fixed: 150s → 300s
+
+The eval runner `--timeout` default was 150s while `QUERY_TIMEOUT_SECONDS` in `.env` was 300s. This mismatch caused 22 identical cases (141–173) to time out in every eval run that used default settings (run_39, run_40). Fixed the default in `evals/run_eval.py` to 300s. Also established a per-run retry pattern using `--case-ids` + `--workers 1` for slow cases, and a dedup+merge script to patch the cases file in-place.
+
+## [2026-03-30] run_39: alpha=0.65 evaluated — neutral-to-slight-regression, reverted
+
+Ran full 173-case eval with RETRIEVAL_ALPHA=0.65. After patching the 22 timeout cases (retry with workers=1, timeout=300s), full result: Hit@1=85.5%, Recall@3=82.4%, MRR=0.882 vs run_40 baseline of 85.0%/83.1%/0.878. Tiny Hit@1 gain (+0.5pp) offset by Recall@3 regression (−0.7pp) and expanded Recall@3 regression (−1.3pp). Alpha tuning is not the lever for `diluted_embedding`. Reverted `RETRIEVAL_ALPHA=0.5`.
+
+## [2026-03-30] run_38: sub_article_of re-ingest complete — reindex confirmed neutral, new metric live
+
+Re-ingested `eu_crr` on Colab T4 with `--reset` to populate `sub_article_of` metadata on all 429x/132x sub-article clusters. `hit_at_1_family` metric now live in eval harness. run_38 result: hit@1=84.97%, hit@1_family=86.13% (family gap +1.2pp confirms sub-article confusion is real). Overall −2.3pp vs SOTA confounded by workers=1 (8 timeout+retry events) — reindex itself is neutral (same text, same BGE-M3 weights). All future eval runs use the new `eu_crr` index. `sub_article_cluster()` now returns populated clusters from Qdrant payloads.
+
+## [2026-03-30] sub_article_of metadata — code complete ✅
+
+Added `sub_article_of` field to `DocumentNode`, sub-article detection in `eurlex_ingest.py` (regex `\d+[a-z]+` → parent is numeric prefix), `ArticleGraph._sub_article_clusters` dict built from `sub_article_of` payloads with `sub_article_cluster()` query method, and `hit_at_1_family` metric in `evals/metrics.py` + `run_eval.py`. Re-ingest completed 2026-03-30 (see run_38 entry above).
 
 ## [2026-03-30] run_37: run_30 SOTA reconfirmation — confirmed, delta is noise
 

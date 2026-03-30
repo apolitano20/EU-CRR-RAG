@@ -50,7 +50,7 @@ DEFAULT_OUTPUT = Path("evals/results")
 DEFAULT_API = "http://localhost:8080"
 
 RETRIEVAL_METRIC_KEYS = [
-    "hit_at_1", "recall_at_1", "recall_at_3", "recall_at_5",
+    "hit_at_1", "hit_at_1_family", "recall_at_1", "recall_at_3", "recall_at_5",
     "mrr", "precision_at_3", "precision_at_5",
 ]
 EXPANDED_METRIC_KEYS = [
@@ -852,10 +852,11 @@ def main(argv: list[str] | None = None) -> None:
                 error_types[et] = error_types.get(et, 0) + 1
         for et, cnt in sorted(error_types.items(), key=lambda x: -x[1]):
             logger.warning("    %s: %d case(s)", et, cnt)
-    logger.info("  Hit@1:      %.1f%%", (ov.get("hit_at_1") or 0) * 100)
-    logger.info("  Recall@3:   %.1f%%", (ov.get("recall_at_3") or 0) * 100)
-    logger.info("  Recall@5:   %.1f%%", (ov.get("recall_at_5") or 0) * 100)
-    logger.info("  MRR:        %.3f", ov.get("mrr") or 0)
+    logger.info("  Hit@1:        %.1f%%", (ov.get("hit_at_1") or 0) * 100)
+    logger.info("  Hit@1(fam):   %.1f%%", (ov.get("hit_at_1_family") or 0) * 100)
+    logger.info("  Recall@3:     %.1f%%", (ov.get("recall_at_3") or 0) * 100)
+    logger.info("  Recall@5:     %.1f%%", (ov.get("recall_at_5") or 0) * 100)
+    logger.info("  MRR:          %.3f", ov.get("mrr") or 0)
 
     ct = summary.get("by_citation_type", {})
     ac = ct.get("article_cited", {})

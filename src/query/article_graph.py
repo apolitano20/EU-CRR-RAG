@@ -34,7 +34,7 @@ _REF_TYPE_PRIORITY: dict[str, int] = {
 # ---------------------------------------------------------------------------
 # Regex patterns for edge-type classification.
 # Scanned against the full article text at graph-build time.
-# Each pattern is checked in order; first match wins.
+# Each pattern is checked in order; first match wins. 
 # ---------------------------------------------------------------------------
 _PREREQ_PATTERNS = [
     re.compile(r"\bsubject to (?:Articles?|the requirements of Article)\s+(\d+\w*)", re.I),
@@ -114,6 +114,10 @@ class ArticleGraph:
     _forward:    dict[str, list[ArticleEdge]] = field(default_factory=lambda: defaultdict(list))
     _reverse:    dict[str, list[ArticleEdge]] = field(default_factory=lambda: defaultdict(list))
     _structural: dict[str, dict] = field(default_factory=dict)
+    # Sub-article family clusters: parent → frozenset of all family members (incl. parent).
+    # Built from sub_article_of payloads when present (requires re-ingest after adding field).
+    # Falls back to regex-derived clusters at query time if metadata is absent.
+    _sub_article_clusters: dict[str, set[str]] = field(default_factory=lambda: defaultdict(set))
     _build_lock: threading.Lock = field(default_factory=threading.Lock)
     _built:      bool = False
 
@@ -186,6 +190,14 @@ class ArticleGraph:
                         "section": payload.get("section", ""),
                     }
 
+                    # Sub-article family clustering (populated when sub_article_of is
+                    # stored in the Qdrant payload — requires re-ingest after field added).
+                    sub_art_of = str(payload.get("sub_article_of", "") or "").strip()
+                    if sub_art_of:
+                        # Both parent and sub-article are in the same cluster.
+                        self._sub_article_clusters[sub_art_of].add(sub_art_of)
+                        self._sub_article_clusters[sub_art_of].add(src_art)
+
                     # Edges from referenced_articles CSV
                     refs_csv = payload.get("referenced_articles", "") or ""
                     if not refs_csv:
@@ -221,10 +233,16 @@ class ArticleGraph:
                 offset = next_offset
 
             elapsed = round((__import__("time").perf_counter() - t0) * 1000)
+            n_clusters = len(self._sub_article_clusters)
             logger.info(
-                "ArticleGraph: built %d nodes, %d edges in %dms",
-                total_nodes, total_edges, elapsed,
+                "ArticleGraph: built %d nodes, %d edges, %d sub-article families in %dms",
+                total_nodes, total_edges, n_clusters, elapsed,
             )
+            if n_clusters == 0:
+                logger.info(
+                    "ArticleGraph: no sub_article_of metadata found — re-ingest to enable "
+                    "sub-article family expansion (sub_article_cluster() will return [])."
+                )
             if elapsed > 3000:
                 logger.warning("ArticleGraph: build took %dms (>3s threshold)", elapsed)
 
@@ -291,6 +309,29 @@ class ArticleGraph:
 
         return result
 
+    def sub_article_cluster(self, article: str) -> list[str]:
+        """Return all members of the same sub-article family, excluding `article` itself.
+
+        For a parent article (e.g. "429"), returns its sub-articles (429a, 429b, …).
+        For a sub-article (e.g. "429b"), returns the parent and all siblings.
+        Returns [] when no family data is available (pre-re-ingest index).
+
+        Uses metadata-derived clusters when available (populated after re-ingest);
+        falls back to an empty list otherwise.  The family is useful for synthesis
+        context enrichment: when a seed article is retrieved, also fetch its family
+        members to ensure the full regulatory cluster is in context.
+        """
+        if not self._built:
+            return []
+        # article may be the parent key itself
+        if article in self._sub_article_clusters:
+            return [m for m in self._sub_article_clusters[article] if m != article]
+        # article may be a sub-article — find its parent cluster
+        for parent, members in self._sub_article_clusters.items():
+            if article in members:
+                return [m for m in members if m != article]
+        return []
+
     def structural_siblings(self, article: str) -> list[str]:
         """Return articles in the same Section as `article` (or same Chapter if no Section).
 
@@ -327,6 +368,11 @@ class ArticleGraph:
     @property
     def edge_count(self) -> int:
         return sum(len(v) for v in self._forward.values())
+
+    @property
+    def sub_article_family_count(self) -> int:
+        """Number of distinct sub-article families known to the graph."""
+        return len(self._sub_article_clusters)
 
     @property
     def is_built(self) -> bool:

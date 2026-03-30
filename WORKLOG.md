@@ -4,10 +4,14 @@ For completed work history, see `COMPLETED.md`.
 
 ---
 
-## Current State (as of 2026-03-26) — run_27 is SOTA
+## Current State (as of 2026-03-30) — run_30 is SOTA (BGE-M3 on current eu_crr index)
 
-**Best run: run_27_completeness** — Hit@1=**87.3%**, Judge Correctness=**0.812**, Judge Completeness=**0.813**, Judge Faithfulness=**0.841**.
+**Best run: run_30_bge_m3_revert** — Hit@1=**87.3%**, Recall@5=**85.2%**, MRR=**0.897**, Judge Correctness=**0.801**, Judge Completeness=**0.798**, Judge Faithfulness=**0.829**.
 Config: `USE_ARTICLE_GRAPH=true`, `USE_MIXED_CHUNKING=true`, `USE_PARAGRAPH_WINDOW_RERANKER=true`, `PARAGRAPH_WINDOW_MAX_WINDOWS=4`, `RETRIEVAL_TOP_K=15`, `RETRIEVAL_ALPHA=0.5`, `TITLE_BOOST_WEIGHT=0`, `ADJACENT_TIEBREAK_DELTA=0.05`, `USE_TOC_ROUTING=false`, `gpt-4o-mini` (standard) + `gpt-4o` (hard queries).
+
+**Why run_30 over run_27:** run_30 IS the current system state (BGE-M3 on the run_28 bidir-cross-ref index). Retrieval is identical to run_27 (hit@1, MRR) with marginally better recall@5 (0.8521 vs 0.8492). Judge metric differences vs run_27 are ~1pp — within noise. Re-ingesting to recover run_27's exact judge scores would cost a full re-ingest for a ~1pp gain. Not worth it.
+
+**Active index:** `eu_crr` (BGE-M3, dense+sparse hybrid) — contains bidir cross-refs baked in from run_28 re-ingest.
 
 **Active synthesis additions (run_26 + run_27):**
 - `_FALSE_PREMISE_RULE` in both prompt templates (3 grounding examples)
@@ -15,14 +19,24 @@ Config: `USE_ARTICLE_GRAPH=true`, `USE_MIXED_CHUNKING=true`, `USE_PARAGRAPH_WIND
 - `_build_key_facts_block()` — deterministic threshold preamble prepended to context
 - `_append_missing_thresholds()` — post-generation deterministic completeness check
 
+**Active .env:** `EMBED_MODEL=bge-m3`, `QDRANT_COLLECTION=eu_crr` (reverted from e5-large-instruct after run_29 regression).
+
 **Next experiment candidates:**
+
+**What we know about remaining failures (as of run_34):**
+- `diluted_embedding` (6 cases, Hit@1=33%): vocabulary mismatch. BM25 also fails (no token overlap). Needs **more dense** signal (try `RETRIEVAL_ALPHA=0.6+`) or targeted synonym additions. alpha=0.4 (more BM25) actively hurt by -6.6pp judge correctness.
+- `multi` (32 cases, recall@1=29.7%): right articles not in the retrieval pool at all. Not a top_k/coverage problem — zero movement from top_k=20, windows=6, or RERANK_TOP_N=8. Needs upstream fix (article graph, multi-article query detection).
+- `leverage_ratio_*` (3-4 cases): 429x sub-article cluster confusion. **Code complete** — `sub_article_of` field added to `DocumentNode`, detection in `eurlex_ingest.py`, `ArticleGraph._sub_article_clusters` built from Qdrant payloads. **Re-ingest on Colab T4 still needed** to populate `sub_article_of` in the `eu_crr` collection. New `hit_at_1_family` eval metric added to `evals/metrics.py` to treat within-family swaps (429↔429b) as hits — this eliminates stochastic noise from borderline reranker ties inside sub-article clusters.
 
 | # | Run | Target | Approach | Effort | Re-ingest |
 |---|-----|--------|---------|--------|-----------|
-| 1 | run_28 | synthesis quality — model swap | Switch synthesis LLM to Claude Sonnet + switch judge to Claude (avoids GPT self-preference bias). Clean new baseline, not directly comparable to prior runs. | Medium | No |
-| 2 | run_28 alt | `capital_ratios` / `large_exposures` retrieval | Reranker upgrade: `BAAI/bge-reranker-v2-m3` (560MB, multilingual, legal-domain). Re-enable `USE_RERANKER=true`. Latency impact must be validated first (retrieval-only ablation). | Medium | No |
-| 3 | run_29 | `diluted_embedding` (remaining 4/6 misses) | Embedding model swap (`multilingual-e5-large-instruct`). Root-cause fix for vocabulary gap. Requires re-ingest. | High | Yes |
-| 4 | — | `multi_hop` synthesis (still 10 stubborn cases) | Investigate case_018, 124, 127, 143 individually — likely need cross-article reasoning instruction or chain-of-thought synthesis for complex multi-hop. | Low-Medium | No |
+| 1 | **run_38_sub_article_reindex** | `leverage_ratio_*` + sub-article metric | ✅ Code complete (2026-03-30). Re-ingest on Colab (`--reset`) to populate `sub_article_of` in `eu_crr`. Run eval to confirm `hit_at_1_family` > `hit_at_1` for 429x/132x cases and that no other slices regress. | Medium | **Yes — next up** |
+| 2 | run_39 | synthesis quality | Switch synthesis LLM to Claude Sonnet + switch judge to Claude (avoids GPT self-preference bias). Clean new baseline targeting Judge Correctness 0.801→0.85. | Medium | No |
+| 3 | run_40 | `diluted_embedding` retrieval | Try `RETRIEVAL_ALPHA=0.65` (more dense, less BM25). run_34 proved alpha=0.4 hurts — try the opposite direction. | Very low | No |
+| 4 | run_41 | `diluted_embedding` + `leverage_ratio_*` | **Article summary enrichment in embedding text** (Option B). Generate a 2–3 sentence GPT-4o-mini summary + 5–8 keyword tags per article; prepend to embedding text at ingest. Targets vocabulary-mismatch failures where query uses plain language / acronyms (e.g. "NSFR", "TREA") that don't appear in article text. Keywords bridge the gap without needing manual synonym map entries. Cost: ~$2–5 for 750 articles. Expected gain: `diluted_embedding` Hit@1 33%→50%+, `leverage_ratio` cluster density improvement. | Medium | Yes |
+| 5 | — | `diluted_embedding` retrieval | Targeted BM25 synonym additions for remaining failing cases (manual case trace first). | Low | No |
+| 6 | — | `multi` hit@1 (9 stubborn cases) | Root cause: ParagraphWindowReranker confidently scores false-friend articles first due to literal token-match in query. Global re-rank cannot overcome this. Possible approaches: (a) query-side: strip subordinate-reference article numbers from query before embedding; (b) prompt-level: sub-query decomposition improvements; (c) Phase 3 synonyms. | Medium | No |
+| 7 | — | `multi_hop` synthesis (stubborn cases) | Investigate case_018, 124, 127, 143 individually. | Low-Medium | No |
 
 ---
 
@@ -61,6 +75,16 @@ All runs on 173-case golden dataset, judge enabled (gpt-4o).
 | run_25_graph_gated | 2026-03-26 | 86.7% | 83.9% | 0.891 | 0.763 | Graph gated on ≥2 distinct retrieved articles. Statistically identical to run_24 on all metrics — wash. |
 | run_26_synonym_falsepremise | 2026-03-26 | 87.3% | 83.9% | 0.897 | 0.792 | BM25 synonym expansion (8 entries) + false premise rule w/ 3 examples. `false_friend` Judge Correctness +0.20 (0.557→0.757). `diluted_embedding` Hit@1 1/6→2/6. **New SOTA.** |
 | **run_27_completeness** | 2026-03-26 | **87.3%** | **83.9%** | **0.897** | **0.812** | Deterministic completeness: threshold preamble (Part A) + post-generation diff (Part B). 7/17 target cases improved, 0 regressed. Judge Completeness +2.5pp, Faithfulness +2.3pp. **Current SOTA.** |
+| run_28_bidir_crossref | 2026-03-26 | 87.3% | 83.9% | 0.897 | 0.802 | Bidirectional structural cross-ref extraction at ingest (Part/Title/Chapter/Section refs stored in metadata). Re-ingested `eu_crr`. Retrieval identical to run_27; judge scores slightly lower across board (correctness −1.0pp, faithfulness −1.9pp). No retrieval gain from bidir refs. |
+| run_29_e5_dense | 2026-03-28 | 76.97% | 83.2% | 0.873 | 0.805 | Embedding swap to `multilingual-e5-large-instruct` (dense-only, 1024-dim, separate `eu_crr_e5` collection). recall@1 −2.5pp, MRR −2.4pp vs run_27. Latency doubled (22s p50 vs 11s). `credit_risk_sa` −30pp, `leverage_ratio_total_exposure` −33pp. recall@5 +1.4pp only upside. **Regression — reverted to BGE-M3.** |
+| **run_30_bge_m3_revert** | 2026-03-28 | **87.3%** | **85.2%** | **0.897** | **0.801** | BGE-M3 revert confirmation on current `eu_crr` index. Retrieval identical to run_27/28 (hit@1, MRR); recall@5 marginally better (0.8521 vs 0.8492). Judge metrics ~1pp below run_27 (noise-level). **Declared new SOTA** — run_30 IS the current system state; re-ingesting to recover run_27's judge scores is not worth the cost. |
+| run_31_bge_reranker_v2_m3 | 2026-03-29 | — | — | — | — | **TOTAL FAILURE**: bge-reranker-v2-m3 (560MB) loaded at startup via `USE_PARAGRAPH_WINDOW_RERANKER=true` fallback path even with `use_reranker=false`. Model too slow — all 173 cases timed out. Reverted `RERANKER_MODEL` to `ms-marco-MiniLM-L-6-v2`. |
+| run_33_bge_int8 | 2026-03-29 | — | — | — | — | **ABANDONED before eval**: benchmark shows PyTorch INT8 dynamic quantization is 0.63x slower on this CPU (313ms vs 197ms FP32) and degrades cosine similarity to 0.968. BGE-M3 encode is only ~200ms (~1%) of 21s end-to-end latency — bottleneck is synthesis (~80%). `torch.quantization.quantize_dynamic` also deprecated in PyTorch 2.10. |
+| run_33_wider_funnel | 2026-03-29 | 86.71% | 84.10% | 0.896 | 0.808 | Wider retrieval funnel: top_k 15→20 + windows 4→6. **Neutral overall — run_30 stays SOTA.** Primary targets (`multi` recall@1, `diluted_embedding` Hit@1) moved zero. `leverage_ratio_total_exposure` regressed -33pp. Tail latency ballooned (P99: 50s→89s). Judge metrics +0.6pp (noise). Conclusion: the `multi`/`diluted_embedding` failures are not a coverage problem — the right article is simply not ranking first regardless of pool size. |
+| run_34_alpha_topn | 2026-03-29 | 87.28% | 84.10% | 0.896 | 0.801 | RETRIEVAL_ALPHA 0.5→0.4 + RERANK_TOP_N 6→8. **Flat-to-slight-regression — run_30 stays SOTA.** Hit@1 and judge correctness identical. Faithfulness -0.4pp, P99 +15s. Key finding: alpha=0.4 (more BM25) HURT `diluted_embedding` judge correctness by -6.6pp — these cases need MORE dense signal, not less (BM25 also fails on vocabulary mismatch). RERANK_TOP_N=8 didn't move `multi` recall@1 — right articles not in pool at all. Two lessons: (1) diluted_embedding → try higher alpha (0.6+), not lower; (2) multi failures need earlier-pipeline fix. |
+| run_35_multi_retrieval_fixes | 2026-03-30 | 83.8% | 86.0% | 0.891 | 0.823 | First attempt at 5 runtime-only multi-article retrieval fixes (blended direct, structural siblings, reverse edges, global re-rank, expanded multi-hop regex). **Net regression on hit@1 (-3.5pp) with two implementation bugs:** (1) triple reranking — ParagraphWindowReranker fired 3× per query, p50 latency 53s vs 20s SOTA; (2) blended direct too broad — 85/173 queries triggered blend (including "Article X as per..." cases), causing 10 regressions. Recall@3/5 improved (bug-driven side effect of triple reranking). Judge correctness +2.2pp (0.823) — synthesis quality benefited from richer context pool. Both bugs identified and corrected for run_36. |
+| run_37_run30_reconfirm | 2026-03-30 | 86.7% | 83.4% | 0.894 | n/a | All 4 run_35/36 fix flags disabled (USE_BLENDED_DIRECT_RETRIEVAL=false, USE_STRUCTURAL_SIBLINGS=false, USE_REVERSE_GRAPH_EXPANSION=false, USE_GLOBAL_RERANK=false). Intended to confirm run_30 SOTA. **Result: -0.6pp vs run_30 — confirmed as noise.** Only 3 case flips vs run_30, all within sub-article clusters (132c↔132, 429b↔429, 92↔93). These articles are borderline-tied in reranker score; outcome varies run-to-run. run_30's 87.3% and run_37's 86.7% are the same system — stable baseline is ~87% ±0.6pp. Validates that 132 and 429 sub-article grouping at re-ingest would permanently fix these borderline flips. |
+| run_36_retrieval_fixes_v2 | 2026-03-30 | 86.7% | 83.1% | 0.893 | n/a* | Corrected version of run_35: fixed triple reranking (skip intermediate expansion rerank when USE_GLOBAL_RERANK=true) and narrowed blended-direct gate to unambiguous subordinate-reference patterns only ("as per", "pursuant to", "deducted from/under", "excluded from/under", "calculated under", "in accordance with") — reduces blend from 85/173 to 2/173 queries. **Regression on hit@1 vs SOTA (−0.6pp), neutral recall@5 (+0.1pp), recall@3 −1.1pp.** 0/9 target cases fixed for hit@1; case_171 recall@3 improved (0→1.0, right article now in pool). 2 new regressions (case_058, case_169), 1 improvement (case_035). *Judge scores in summary file are invalid (19/173 cases judged from aborted first attempt — not comparable). Latency 23s (+11%). **run_30 remains SOTA.** Core finding: ParagraphWindowReranker's literal token-match scores for false-friend articles are too strong for global re-rank to overcome at hit@1. |
 
 Codex Dashboard Review 2 hang fixes applied 2026-03-20: eval runner `as_completed` hang fixed (replaced with `wait()` polling loop + `shutdown(wait=False)`); `/api/query` converted to async with `asyncio.to_thread` + `asyncio.wait_for` (504 on timeout); BGE-M3 `_encode_lock` added to serialize CPU encodes; `--auto-start-api` stdout pipe bug fixed (DEVNULL).
 
@@ -80,7 +104,7 @@ Git consolidated to single `main` branch (deleted local + remote `master`).
 | 3 | Metadata used for filtering | ✅ |
 | 4 | Hybrid retrieval | ✅ |
 | 5 | Reranker | ✅ (opt-in via `USE_RERANKER`) |
-| 6 | Embedding model benchmarked | ❌ Reasonable choice, no benchmark |
+| 6 | Embedding model benchmarked | ✅ run_29 benchmarked `multilingual-e5-large-instruct` vs BGE-M3 — BGE-M3 wins on recall@1, MRR, latency; e5 marginally better on recall@5 only |
 | 7 | Retrieval + answer quality measured separately | ✅ Baseline eval run completed 2026-03-20: 173 cases, Hit@1=81.3%, Judge Correctness=0.774 |
 | 8 | Smallest useful grounded context | ✅ (top_k=6, cutoff=0.3) |
 | 9 | Citations + explicit uncertainty | ✅ |
@@ -154,7 +178,7 @@ Root causes of the 12 ranking failures:
 | 1 | **HyDE** — generate a hypothetical CRR-style answer pre-retrieval; embed and retrieve against that instead of raw query. | 6 terminology failures | Medium | No | ✅ Tried (run_8): neutral retrieval, +latency. Not adopted. |
 | 2 | **Article title boost** — boost matching nodes pre-rerank based on article title / query token overlap. | 4 concept-in-unexpected failures | Low | No | ✅ Tried (run_5): hurt across the board. `TITLE_BOOST_WEIGHT=0`. |
 | 3 | **Adjacent article tiebreaker** — when two adjacent articles score within 0.05 of each other, prefer the one whose title more closely matches query keywords. | 7 ranking failures | Low | No | ✅ **DONE (run_12): +1.7pp Hit@1, false_friend +14.3pp. Kept.** |
-| 4 | **429x sub-article metadata** — add `sub_article_of` field to group 429/429a/429b/429c/429e. | 3 niche sub-article failures | Medium | Yes | ⬜ Not started |
+| 4 | **429x sub-article metadata** — add `sub_article_of` field to group 429/429a/429b/429c/429e. | 3 niche sub-article failures | Medium | Yes | 🔄 Code complete (2026-03-30). Re-ingest pending. |
 | 5 | **run_18: judge run on run_17 config** — run full eval with judge enabled on current best config (para-window reranker) to get comparable judge scores vs run_2e baseline. | — | Low | No | ✅ Superseded — run_20 judge complete (Correctness=0.793). |
 | 6 | **Domain query rewriting** — rewrite plain-language query into CRR legal register before embedding. | 6 diluted_embedding failures | Low | No | ✅ Tried (run_21): Hit@1 −5.8pp vs run_20. diluted_embedding unchanged. **Regression — reverted.** |
 | 7 | **False premise + conditional logic prompt rules** — explicit instructions to refute false premises and state conditions. | 14 false_friend cases | Low | No | ✅ Tried (run_22): false_friend −12.2pp (over-hedging), diluted_embedding +8.3pp. Net regression on target. **Reverted.** |
@@ -225,7 +249,7 @@ Bottleneck analysis (2026-03-18): main latency sources in order of impact.
 
 | # | Bottleneck | Current state | Improvement options | Effort |
 |---|------------|--------------|---------------------|--------|
-| 1 | **BGE-M3 CPU inference** | 570MB XLM-RoBERTa running on CPU; ~5–15s per query encoding | (a) **ONNX Runtime + INT8 quantization** — 2–4x speedup, same model, no GPU needed. (b) **Switch to `bge-small-en-v1.5`** (33MB) — much faster, some quality trade-off. (c) **GPU** — 10–50x if hardware available (code already has CUDA detection). | Medium |
+| 1 | **BGE-M3 CPU inference** | BGE-M3 encodes in ~200ms per query — only ~1% of total latency. **Not the bottleneck.** ~~ONNX INT8~~ benchmarked (run_33): 0.63x slower, cosine sim 0.968 — abandoned. `torch.quantization.quantize_dynamic` deprecated in PyTorch 2.10. Switch to `torchao` if revisiting. | GPU only real option; not worth effort. |
 | 2 | **OpenAI GPT-4o synthesis** | ~~Blocking call, 5–30s; user sees nothing until complete~~ ✅ Streaming done 2026-03-18 | (a) **Switch to GPT-4o-mini** — 3–5x faster, cheaper, minimal quality loss for structured Q&A with retrieved context. | Low |
 | 3 | **Qdrant cloud round-trips** | Multiple sequential calls per query (retrieval + cross-ref expansion); each ~1–3s network RTT | (a) **Local Qdrant** — eliminates network latency. (b) **Parallelise cross-ref expansion** — currently sequential; easy win with `ThreadPoolExecutor` or `asyncio.gather`. | Low |
 | 4 | **Cold-start (first query)** | BGE-M3 loads from disk on first query (~25s) | Solved by GPU / ONNX above. Pre-warming at startup is an option but risks OOM if a prior process still holds the model. | — |

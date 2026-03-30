@@ -93,6 +93,26 @@ _ANNEX_KEYWORDS: dict[str, str] = {
 _ANNEX_NUM_PAT = re.compile(r"\b(I{1,3}|IV)\b")
 _ROMAN_ORDER = ["I", "II", "III", "IV"]
 
+# ── Sub-article detection ─────────────────────────────────────────────────────
+# Matches article numbers like "429a", "429b", "132c" (digits followed by one or
+# more lowercase letters, no digits after the suffix).  Does NOT match plain
+# numeric articles ("429") or annexes ("I", "II").
+_SUB_ARTICLE_RE = re.compile(r"^(\d+)([a-z]+)$", re.I)
+
+
+def _get_sub_article_parent(article_num: str) -> Optional[str]:
+    """Return the parent article number if article_num is a sub-article.
+
+    Examples:
+        "429a"  -> "429"
+        "429b"  -> "429"
+        "132c"  -> "132"
+        "429"   -> None
+        "92"    -> None
+    """
+    m = _SUB_ARTICLE_RE.match(article_num)
+    return m.group(1) if m else None
+
 # ── Structural cross-reference extraction ──────────────────────────────────────
 
 # Explicit non-empty Roman numerals up to XII (covers all CRR Parts and Titles).
@@ -455,6 +475,7 @@ class EurLexIngester:
 
         # --- ARTICLE-level document (always produced) ---
         article_node_id = f"art_{article_num}_{self.language}"
+        sub_article_of = _get_sub_article_parent(article_num)
         article_node = DocumentNode(
             node_id=article_node_id,
             level=NodeLevel.ARTICLE,
@@ -474,6 +495,7 @@ class EurLexIngester:
             referenced_sections=ref_sections,
             has_table=has_table,
             has_formula=has_formula,
+            sub_article_of=sub_article_of,
             chunk_type="ARTICLE",
         )
         article_meta = article_node.to_metadata()
@@ -532,6 +554,7 @@ class EurLexIngester:
                     referenced_sections=ref_sections,
                     has_table=bool(para_div.find("table")),
                     has_formula=bool(para_div.find("img", src=re.compile(r"^data:image"))),
+                    sub_article_of=sub_article_of,
                     chunk_type="PARAGRAPH",
                     parent_article_id=article_node_id,
                     para_id=para_num,

@@ -2,6 +2,22 @@
 
 ---
 
+## [2026-03-30] LlamaIndex embeds ALL metadata by default — exclude non-semantic fields explicitly
+
+**Context:** Diagnosing why cases 137, 141, 156 regressed after the run_38 re-ingest despite identical code and model weights.
+**What happened / insight:** LlamaIndex's `Document.get_content(metadata_mode='embed')` includes every key from `metadata` dict in the embedding text unless `excluded_embed_metadata_keys` is set. The `referenced_articles` field (e.g. art.197 has `referenced_articles: 132,132a`) injects article numbers as BGE-M3 sparse tokens. For a query about art.132's content, art.197 scores higher than art.132 itself because "132" appears in art.197's metadata text but art.132's metadata only has `article: 132`. This is a systematic ranking inversion: articles that *reference* the answer outscore the answer. Fix: set `excluded_embed_metadata_keys` on every Document to exclude all non-semantic fields (referenced_*, structural IDs, boolean flags, sub_article_of).
+**Take-away:** Always set `excluded_embed_metadata_keys` when creating LlamaIndex Documents with rich metadata. Keep only semantically meaningful fields in the embedding: `article`, `article_title`, `part/title/chapter/section`, `language`. Everything else (cross-references, structural IDs, flags) is for Qdrant filtering only — it must not contaminate the embedding.
+
+---
+
+## [2026-03-30] BGE-M3 on CPU cannot handle 4 parallel workers without latency collapse
+
+**Context:** run_41 was launched from the dashboard with 4 workers and 120s timeout. 16 cases timed out despite the same cases completing fine in single-worker runs.
+**What happened / insight:** BGE-M3 P99 latency at workers=1 is ~118s. With 4 concurrent workers, CPU contention pushes slow queries well past 120s. run_40 (workers=1) had 0 failures; run_41 (workers=4) had 16 failures on the exact same cases. The dashboard defaulted to 120s timeout (vs CLI's 300s), compounding the problem.
+**Take-away:** Use workers=1 for all BGE-M3-on-CPU eval runs. The model is the CPU bottleneck — parallelism degrades rather than improves throughput. Dashboard eval timeout default has been raised to 300s to match the CLI default.
+
+---
+
 ## [2026-03-30] Eval runner timeout must match server timeout — mismatch causes silent recurring failures
 
 **Context:** Every eval run (run_39, run_40) produced exactly 22 timeout failures on cases 141–173, despite the server being configured with `QUERY_TIMEOUT_SECONDS=300`.

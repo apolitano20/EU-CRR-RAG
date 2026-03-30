@@ -93,6 +93,34 @@ _ANNEX_KEYWORDS: dict[str, str] = {
 _ANNEX_NUM_PAT = re.compile(r"\b(I{1,3}|IV)\b")
 _ROMAN_ORDER = ["I", "II", "III", "IV"]
 
+# ── Embedding metadata exclusion ──────────────────────────────────────────────
+# These fields are stored in Qdrant for filtering / graph-building but must NOT
+# appear in the text that BGE-M3 encodes.  Including them would cause articles
+# that merely *reference* a target article (via referenced_articles) to score
+# higher than the target article itself — a systematic ranking inversion.
+# Structural identifiers and boolean flags also add noise without semantic value.
+_EXCLUDED_EMBED_METADATA_KEYS: list[str] = [
+    "node_id",
+    "level",
+    "annex_id",
+    "annex_title",
+    "referenced_articles",
+    "referenced_external",
+    "referenced_annexes",
+    "referenced_parts",
+    "referenced_titles",
+    "referenced_chapters",
+    "referenced_sections",
+    "has_table",
+    "has_formula",
+    "sub_article_of",
+    "chunk_type",
+    "parent_article_id",
+    "para_id",
+    "display_text",
+    "best_paragraph",
+]
+
 # ── Sub-article detection ─────────────────────────────────────────────────────
 # Matches article numbers like "429a", "429b", "132c" (digits followed by one or
 # more lowercase letters, no digits after the suffix).  Does NOT match plain
@@ -507,6 +535,7 @@ class EurLexIngester:
             Document(
                 text=article_embedding_text,
                 metadata=article_meta,
+                excluded_embed_metadata_keys=_EXCLUDED_EMBED_METADATA_KEYS,
                 id_=_node_id_to_uuid(article_node_id),
             )
         ]
@@ -568,6 +597,7 @@ class EurLexIngester:
                     Document(
                         text=para_embedding_text,
                         metadata=para_meta,
+                        excluded_embed_metadata_keys=_EXCLUDED_EMBED_METADATA_KEYS,
                         id_=_node_id_to_uuid(para_node_id),
                     )
                 )
@@ -608,7 +638,9 @@ class EurLexIngester:
         )
         embedding_text = f"{prefix}\n\n{text}" if prefix else text
 
-        return Document(text=embedding_text, metadata=meta, id_=_node_id_to_uuid(node.node_id))
+        return Document(text=embedding_text, metadata=meta,
+                        excluded_embed_metadata_keys=_EXCLUDED_EMBED_METADATA_KEYS,
+                        id_=_node_id_to_uuid(node.node_id))
 
     # ------------------------------------------------------------------
     # Structured text extraction

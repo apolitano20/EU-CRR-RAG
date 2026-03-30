@@ -998,8 +998,8 @@ def _run_eval_panel(empty: bool = True) -> None:
         )
     with c4:
         req_timeout = st.number_input(
-            "Request timeout (s)", min_value=30, max_value=600, value=120, step=30,
-            help="Per-query HTTP timeout. Increase if the API is slow (BGE-M3 on CPU needs ~30-60 s).",
+            "Request timeout (s)", min_value=30, max_value=600, value=300, step=30,
+            help="Per-query HTTP timeout. BGE-M3 on CPU can reach P99 ~120 s; keep at 300 s to avoid spurious timeouts.",
         )
 
     api_url = st.text_input("API URL", value="http://localhost:8080")

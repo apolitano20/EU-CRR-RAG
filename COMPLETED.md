@@ -5,6 +5,18 @@ For open tasks and backlog, see `WORKLOG.md`.
 
 ---
 
+## [2026-03-30] Root cause of run_38 regression identified and fixed — embedding metadata pollution
+
+Diagnosed why cases 137, 141, 156, 169 regressed after the run_38 re-ingest: LlamaIndex was including ALL metadata fields in embedding text by default, meaning `referenced_articles` (e.g. art.197's "132,132a" cross-references) appeared as BGE-M3 sparse tokens, making citing articles outscore the cited articles for those queries. Fix: added `_EXCLUDED_EMBED_METADATA_KEYS` to `eurlex_ingest.py` excluding all non-semantic fields (referenced_*, node_id, has_table, sub_article_of, chunk_type, etc.) from all three Document constructors. Requires re-ingest to materialise. Expected to recover ~87.3% Hit@1.
+
+## [2026-03-30] run_41: article-ref stripping + unrated synonyms — neutral overall, not shipping
+
+Full 173-case eval (16 timeout cases recovered via retry with --workers 1 --timeout 300). Combined result: Hit@1=84.4%, Recall@3=83.2%, MRR=0.876 — essentially flat vs run_40. Gains in `multi_hop` (+2.1pp) and `large_exposures` (+2.9pp) offset by regressions in `false_friend` (−7.1pp) and `negative` (−6.3pp). Stripping article refs before cross-encoder hurts queries where the cited article IS the answer. Not shipping.
+
+## [2026-03-30] Dashboard eval timeout default fixed: 120s → 300s
+
+The dashboard's "Request timeout" widget defaulted to 120s, while the CLI default is 300s. Run_41 was launched with 4 workers and 120s timeout, causing 16 cases to time out (BGE-M3 P99 latency is ~118s at workers=1; contention at workers=4 pushed slow cases over 120s). Fixed dashboard default to 300s in `evals/dashboard.py`. Also identified that workers=1 is the correct setting for BGE-M3 on CPU to avoid contention.
+
 ## [2026-03-30] run_40: SOTA reconfirm post-re-ingest — new working baseline established
 
 Re-ran run_30 config (alpha=0.5, all flags identical) after the run_38 re-ingest. Result: Hit@1=85.0%, Hit@1(family)=86.1%, MRR=0.878, n=173 (0 failures after retry merge). Confirmed −2.3pp regression vs run_30 is real and structural — caused by non-deterministic FP16 GPU embeddings on Colab T4 at re-ingest time (and possibly a fresh EUR-Lex HTML fetch). The `sub_article_of` code change itself is not the cause. run_40 is the new working baseline for all future experiments.

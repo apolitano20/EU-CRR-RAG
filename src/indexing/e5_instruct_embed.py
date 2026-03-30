@@ -29,12 +29,22 @@ def _get_model():
     if _model is None:
         with _model_lock:
             if _model is None:
+                import sys
                 import torch
                 from sentence_transformers import SentenceTransformer
+
+                # On Windows, PyTorch's meta-tensor loading path
+                # (_load_state_dict_into_meta_model) crashes with an access
+                # violation.  Disabling low_cpu_mem_usage forces the standard
+                # direct-allocation path which works reliably on all platforms.
+                model_kwargs = {}
+                if sys.platform == "win32":
+                    model_kwargs["low_cpu_mem_usage"] = False
 
                 m = SentenceTransformer(
                     "intfloat/multilingual-e5-large-instruct",
                     trust_remote_code=False,
+                    model_kwargs=model_kwargs,
                 )
                 if torch.cuda.is_available():
                     m = m.to("cuda")

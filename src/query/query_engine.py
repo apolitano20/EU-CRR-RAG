@@ -64,6 +64,19 @@ USE_MIXED_CHUNKING: bool = os.getenv("USE_MIXED_CHUNKING", "false").lower() == "
 # When true, cross-reference expansion uses the pre-computed ArticleGraph for BFS traversal
 # with ref-type prioritisation instead of flat alphabetical CSV expansion.
 USE_ARTICLE_GRAPH: bool = os.getenv("USE_ARTICLE_GRAPH", "true").lower() == "true"
+# When true, single-article direct lookups are blended with semantic retrieval via RRF so
+# that queries citing one article but asking about a related concept are not hard-anchored
+# to that article alone (e.g. "given Art 36(1)(d), what about the leverage-ratio exposure?").
+USE_BLENDED_DIRECT_RETRIEVAL: bool = os.getenv("USE_BLENDED_DIRECT_RETRIEVAL", "true").lower() == "true"
+# When true, structural siblings (same-section or same-chapter articles) of the top retrieved
+# articles are appended to the expansion candidates for multi-article queries.
+USE_STRUCTURAL_SIBLINGS: bool = os.getenv("USE_STRUCTURAL_SIBLINGS", "true").lower() == "true"
+# When true, reverse-edge BFS is run alongside forward BFS to surface articles that cite the
+# seed articles (e.g. Article 414 cites 413, so retrieving 413 can now reach 414).
+USE_REVERSE_GRAPH_EXPANSION: bool = os.getenv("USE_REVERSE_GRAPH_EXPANSION", "true").lower() == "true"
+# When true, primary and expanded nodes are merged and globally re-ranked together by the
+# active reranker so that a highly-relevant expanded node can reach rank-1.
+USE_GLOBAL_RERANK: bool = os.getenv("USE_GLOBAL_RERANK", "true").lower() == "true"
 _HISTORY_MAX_TURNS = 5
 # When EVAL_MODE=true all internal LLM calls use temperature=0 for reproducibility.
 EVAL_MODE: bool = os.getenv("EVAL_MODE", "false").lower() == "true"
@@ -94,8 +107,15 @@ class BlendedReranker(BaseNodePostprocessor):
 
     def __init__(self, model: str, top_n: int, alpha: float) -> None:
         super().__init__()
+        import sys
         from sentence_transformers import CrossEncoder
-        self._model = CrossEncoder(model)
+        # On Windows + Python 3.13, PyTorch's meta-tensor loading path
+        # (_load_state_dict_into_meta_model) causes an access violation /
+        # GIL deadlock when the model is later called from a non-main thread.
+        # Disabling low_cpu_mem_usage forces direct memory allocation and
+        # keeps inference thread-safe (same fix as e5_instruct_embed.py).
+        model_kwargs = {"low_cpu_mem_usage": False} if sys.platform == "win32" else {}
+        self._model = CrossEncoder(model, max_length=512, model_kwargs=model_kwargs)
         self._top_n = top_n
         self._alpha = alpha  # weight for retrieval score
 
@@ -369,8 +389,10 @@ class ParagraphWindowReranker(BaseNodePostprocessor):
 
     def __init__(self, model: str, top_n: int, alpha: float, max_windows: int) -> None:
         super().__init__()
+        import sys
         from sentence_transformers import CrossEncoder
-        self._model = CrossEncoder(model)
+        model_kwargs = {"low_cpu_mem_usage": False} if sys.platform == "win32" else {}
+        self._model = CrossEncoder(model, max_length=512, model_kwargs=model_kwargs)
         self._top_n = top_n
         self._alpha = alpha
         self._max_windows = max_windows
@@ -640,6 +662,9 @@ _SYNONYM_MAP: dict[str, str] = {
     "solvency threshold": "initial capital own funds",
     "internal permission for tailored risk evaluation": "Internal Ratings-Based approach IRB",
     "blend of assets": "mixed pool",
+    # run_41 additions — case_163: vocabulary gap for unrated corporate exposures
+    "external credit assessment is missing": "unrated",
+    "no external credit assessment": "unrated",
 }
 _SYNONYM_RE = re.compile(
     r"\b(" + "|".join(re.escape(k) for k in _SYNONYM_MAP) + r")\b",
@@ -670,6 +695,78 @@ _ARTICLE_COORD_RE = re.compile(
 
 # Matches "Articles N to M" range syntax for query-time expansion.
 _RANGE_RE = re.compile(r"\bArticles?\s+(\d+[a-z]*)\s+to\s+(\d+[a-z]*)\b", re.I)
+
+# Matches article references that appear in a subordinate / prepositional context, meaning the
+# cited article is supporting context rather than the subject of the query.
+# Examples: "assets deducted as per Article 36(1)(d)", "calculated pursuant to Article 429".
+# Used to gate USE_BLENDED_DIRECT_RETRIEVAL: only blend when the single cited article is
+# subordinate, not when the query IS about that article ("Explain Article 92",
+# "According to Article 429, what is X?", "under Article 52(1) requirements").
+#
+# Intentionally conservative — only patterns where the article is unambiguously a legal
+# basis/citation rather than the topic of the query:
+#   "as per Article N"       — citing a rule as basis for another question
+#   "pursuant to Article N"  — formal legal citation for a secondary concept
+#   "deducted from/under Article N" — deduction rule is Article N, question is about something else
+#   "excluded from/under Article N" — same pattern
+#   "calculated pursuant to Article N" — calculation basis, question is about the result
+# Patterns intentionally excluded (too ambiguous or usually direct):
+#   "under Article N"        — "requirements under Article 92" is usually about Article 92
+#   "according to Article N" — "According to Article 429, what is X?" is directly about Article 429
+#   "referred to in Article N" — usually "what does Article N refer to?"
+_SUBORDINATE_ART_RE = re.compile(
+    r"\b(?:as\s+per|pursuant\s+to"
+    r"|deducted\s+(?:from|under)"
+    r"|excluded\s+(?:from|under)"
+    r"|calculated\s+(?:under|pursuant\s+to)"
+    r"|in\s+accordance\s+with"
+    r")\s+Article\s+\d",
+    re.IGNORECASE,
+)
+
+# Broader subordinate-reference detector used in the reranker stripping pass.
+# Catches subordinate patterns from _SUBORDINATE_ART_RE PLUS two additional forms
+# that cause direct-lookup false-friends in multi_hop queries:
+#   "under Article N(x)"        — e.g. "under Article 7(1)" (case_153)
+#   "referred to in Article N"  — e.g. "referred to in point (a) of Article 92" (case_043)
+# These are NOT included in _SUBORDINATE_ART_RE (which gates direct-lookup blending)
+# because they are occasionally the primary topic; they are safe to strip only from the
+# reranker query string so that cross-encoder scoring focuses on the semantic subject.
+_SUBORDINATE_LOOKUP_RE = re.compile(
+    # Formal legal citation phrases ("as per Article N", "pursuant to Article N", etc.)
+    r"\b(?:as\s+per|pursuant\s+to"
+    r"|deducted\s+(?:from|under)"
+    r"|excluded\s+(?:from|under)"
+    r"|calculated\s+(?:under|pursuant\s+to)"
+    r"|in\s+accordance\s+with"
+    r")\s+Article\s+\d[\w]*(?:\s*\([^)]*\))*"
+    # "under Article N(x)" with mandatory parenthetical — case_153 pattern
+    r"|\bunder\s+Article\s+\d[\w]*\s*\([^)]+\)"
+    # "referred to in [point (x) of] Article N" — case_043 pattern
+    r"|\breferred\s+to\s+in\s+(?:point\s+\([^)]+\)\s+of\s+)?Article\s+\d[\w]*(?:\s*\([^)]*\))*",
+    re.IGNORECASE,
+)
+
+
+def _strip_subordinate_article_refs(query: str) -> str:
+    """Remove subordinate article references from a query for reranker scoring.
+
+    When a query like "What are the requirements under Article 7(1)?" is scored
+    against Article 7, the cross-encoder sees "Article 7(1)" in both the query
+    and the document, creating a false-friend match.  Strips the entire match
+    (including the preposition) so cross-encoder scoring focuses on semantic content.
+
+    Returns the original query unchanged if no subordinate reference is found.
+    """
+    if not _SUBORDINATE_LOOKUP_RE.search(query):
+        return query
+    result = query
+    # Iterate in reverse so that slicing indices remain valid after each removal.
+    for m in reversed(list(_SUBORDINATE_LOOKUP_RE.finditer(query))):
+        result = result[: m.start()] + result[m.end() :]
+    result = re.sub(r"\s{2,}", " ", result)
+    result = re.sub(r"\s+([?!.,;:])", r"\1", result)
+    return result.strip()
 
 
 def _expand_article_ranges(query: str) -> str:
@@ -1223,8 +1320,11 @@ class QueryEngine:
 
         new_reranker = None
         if self.use_reranker:
-            from llama_index.core.postprocessor import SentenceTransformerRerank
-            new_reranker = SentenceTransformerRerank(top_n=RERANK_TOP_N, model=RERANKER_MODEL)
+            # Use BlendedReranker (not SentenceTransformerRerank) so all reranker paths
+            # go through _reranker_lock and the Windows low_cpu_mem_usage=False workaround.
+            new_reranker = BlendedReranker(
+                model=RERANKER_MODEL, top_n=RERANK_TOP_N, alpha=RERANK_BLEND_ALPHA
+            )
             logger.info("Reranker loaded: %s (top_n=%d)", RERANKER_MODEL, RERANK_TOP_N)
 
         new_title_booster = None
@@ -1267,6 +1367,19 @@ class QueryEngine:
                     RERANKER_MODEL, RERANK_TOP_N, PARAGRAPH_WINDOW_MAX_WINDOWS,
                 )
 
+        # Pre-build wide reranker for the title-boost path (top_n=RETRIEVAL_TOP_K so that
+        # the title booster receives all scored nodes and makes the final truncation).
+        # Only needed when both a standard reranker and title_booster are active.
+        # Using BlendedReranker keeps all reranker instances behind _reranker_lock.
+        new_wide_reranker = None
+        if new_reranker is not None and new_title_booster is not None:
+            new_wide_reranker = BlendedReranker(
+                model=RERANKER_MODEL, top_n=RETRIEVAL_TOP_K, alpha=RERANK_BLEND_ALPHA
+            )
+            logger.info(
+                "Wide reranker pre-built for title-boost path (top_n=%d)", RETRIEVAL_TOP_K
+            )
+
         new_engine = self._build_engine(new_vector_index)
 
         # Load Article 4 definitions fast-path store
@@ -1301,6 +1414,7 @@ class QueryEngine:
             self._reranker = new_reranker
             self._para_reranker = new_para_reranker
             self._title_booster = new_title_booster
+            self._wide_reranker = new_wide_reranker
             self._tiebreaker = new_tiebreaker
             self._defs = new_defs
             self._toc = new_toc
@@ -1404,16 +1518,47 @@ class QueryEngine:
 
         query_bundle = QueryBundle(query_str=user_query)
 
-        # Stage 1: Retrieval (includes postprocessors: similarity cutoff + reranker if enabled)
+        # Stage 1: Retrieval (includes postprocessors: similarity cutoff + deduplicator)
+        # Note: ParagraphWindowReranker and AdjacentArticleTiebreakerPostprocessor are
+        # applied manually below (after engine.retrieve) so we can pass a stripped query
+        # to the cross-encoder when subordinate article references are detected.
         t_ret = time.perf_counter()
+        _has_subordinate_ref = bool(_SUBORDINATE_LOOKUP_RE.search(user_query))
         if direct_art:
-            source_nodes = self._direct_article_retrieve(direct_art, user_query, language)
-            if not source_nodes:
+            direct_nodes = self._direct_article_retrieve(direct_art, user_query, language)
+            if not direct_nodes:
                 logger.warning(
                     "[%s] Direct lookup for Article %s returned no nodes — falling back to semantic retrieval",
                     trace_id, direct_art,
                 )
                 source_nodes = engine.retrieve(query_bundle)
+            elif _has_subordinate_ref:
+                # The single cited article appears in a subordinate context ("under Article 7(1)",
+                # "referred to in Article 92", "deducted as per Article 36") — the query is about
+                # a related concept, NOT about that article itself.  Direct lookup would pin score=1.0
+                # to the wrong article (false-friend).  Fall back to semantic retrieval instead.
+                logger.info(
+                    "[%s] Subordinate article ref detected — skipping direct lookup for Art %s, using semantic retrieval",
+                    trace_id, direct_art,
+                )
+                source_nodes = engine.retrieve(query_bundle)
+            elif USE_BLENDED_DIRECT_RETRIEVAL and _SUBORDINATE_ART_RE.search(user_query):
+                # Blend direct fetch with semantic retrieval via RRF, but only when the cited
+                # article appears in a subordinate/prepositional context ("as per Article 36(1)(d)",
+                # "deducted under Article 36") — meaning the query is about a related concept, not
+                # about the article itself. Avoids regressing "Explain Article 92" style queries
+                # where the cited article IS the answer.
+                semantic_nodes = engine.retrieve(query_bundle)
+                if semantic_nodes:
+                    source_nodes = merge_rrf(direct_nodes, semantic_nodes, cap=RETRIEVAL_TOP_K)
+                    logger.info(
+                        "[%s] Blended direct (Art %s, %d nodes) + semantic (%d nodes) → %d merged",
+                        trace_id, direct_art, len(direct_nodes), len(semantic_nodes), len(source_nodes),
+                    )
+                else:
+                    source_nodes = direct_nodes
+            else:
+                source_nodes = direct_nodes
         else:
             source_nodes = engine.retrieve(query_bundle)
         t_retrieval_ms = round((time.perf_counter() - t_ret) * 1000)
@@ -1428,6 +1573,30 @@ class QueryEngine:
                 n for n in source_nodes
                 if n.node.metadata.get("language") == language
             ]
+
+        # Manual reranker pass (ParagraphWindowReranker + tiebreaker).
+        # When para_reranker is configured it is NOT added to the engine's postprocessor chain
+        # (see _build_engine); instead we apply it here so we can strip subordinate article
+        # references from the cross-encoder query, preventing false-friend boosting.
+        # Placed after the cross-lingual fallback so that fallback results are also reranked.
+        para_reranker = getattr(self, "_para_reranker", None)
+        tiebreaker = getattr(self, "_tiebreaker", None)
+        if para_reranker is not None and source_nodes:
+            stripped_query = _strip_subordinate_article_refs(user_query)
+            reranker_query = stripped_query if stripped_query != user_query else user_query
+            if stripped_query != user_query:
+                logger.info(
+                    "[%s] Stripped subordinate refs for reranker: %r → %r",
+                    trace_id, user_query, stripped_query,
+                )
+            source_nodes = para_reranker.postprocess_nodes(
+                source_nodes, QueryBundle(reranker_query)
+            )
+            title_booster = getattr(self, "_title_booster", None)
+            if title_booster is not None:
+                source_nodes = title_booster.postprocess_nodes(source_nodes, query_bundle)
+        if tiebreaker is not None and source_nodes:
+            source_nodes = tiebreaker.postprocess_nodes(source_nodes, query_bundle)
 
         # Stage 2: Cross-reference expansion
         expansions = max_cross_ref_expansions if max_cross_ref_expansions is not None \
@@ -1459,8 +1628,10 @@ class QueryEngine:
 
         # Score expanded nodes with the reranker so they enter context in evidence order,
         # not arbitrary fetch order. Skip if no reranker is loaded.
+        # Also skip if USE_GLOBAL_RERANK is active — the global pass below will re-rank
+        # primary and expanded nodes together, making this intermediate pass redundant.
         active_reranker = getattr(self, "_para_reranker", None) or getattr(self, "_reranker", None)
-        if deduped_expanded and active_reranker is not None:
+        if deduped_expanded and active_reranker is not None and not USE_GLOBAL_RERANK:
             try:
                 scored_expanded = active_reranker.postprocess_nodes(
                     deduped_expanded, query_bundle=QueryBundle(query_str=user_query)
@@ -1473,30 +1644,40 @@ class QueryEngine:
             except Exception as exc:
                 logger.warning("Reranking of expanded nodes failed: %s", exc)
 
-        all_nodes_for_synthesis = source_nodes + deduped_expanded
+        # Global re-rank: merge primary and expanded nodes and re-sort together so that a
+        # highly-relevant expanded node can reach rank-1. Without this, expansion improves
+        # recall/context but never changes hit@1.
+        if USE_GLOBAL_RERANK and deduped_expanded and active_reranker is not None:
+            all_candidates = source_nodes + deduped_expanded
+            try:
+                all_reranked = active_reranker.postprocess_nodes(
+                    all_candidates, query_bundle=QueryBundle(query_str=user_query)
+                )
+                # Restore any nodes dropped by top_n truncation at lower priority
+                reranked_ids = {n.node.node_id for n in all_reranked}
+                leftover = [n for n in all_candidates if n.node.node_id not in reranked_ids]
+                all_nodes_for_synthesis = all_reranked + leftover
+            except Exception as exc:
+                logger.warning("Global re-ranking of primary+expanded nodes failed: %s — falling back to append", exc)
+                all_nodes_for_synthesis = source_nodes + deduped_expanded
+        else:
+            all_nodes_for_synthesis = source_nodes + deduped_expanded
 
         def _snippet(node) -> str:
             # Prefer display_text (body without hierarchy prefix) for user-facing snippets.
             raw = node.node.metadata.get("display_text") or node.node.get_content()
             return raw[:500]
 
+        # Derive expanded flag from set membership — ordering may be mixed after global re-rank.
+        primary_ids = {n.node.node_id for n in source_nodes}
         sources = [
             {
                 "text": _snippet(node),
                 "score": float(round(node.score or 0.0, 4)),
                 "metadata": node.node.metadata,
-                "expanded": False,
+                "expanded": node.node.node_id not in primary_ids,
             }
-            for node in source_nodes
-        ]
-        sources += [
-            {
-                "text": _snippet(node),
-                "score": 0.0,
-                "metadata": node.node.metadata,
-                "expanded": True,
-            }
-            for node in deduped_expanded
+            for node in all_nodes_for_synthesis
         ]
 
         logger.info(
@@ -1748,6 +1929,50 @@ class QueryEngine:
                 exclude=_seen,
             )
             logger.debug("ArticleGraph BFS from %s → %d candidates", seed_arts, len(candidates))
+
+            # Reverse-edge expansion: surface articles that cite the seed articles.
+            # Budget-capped at 2 to avoid flooding context with generic citing articles.
+            if USE_REVERSE_GRAPH_EXPANSION:
+                reverse_budget = min(2, max(0, limit - len(candidates)))
+                if reverse_budget > 0:
+                    reverse_candidates = graph.bfs_expand(
+                        seeds=seed_arts,
+                        max_depth=1,
+                        budget=reverse_budget,
+                        exclude=_seen | set(candidates),
+                        direction="reverse",
+                    )
+                    if reverse_candidates:
+                        candidates = list(candidates) + reverse_candidates
+                        logger.debug(
+                            "ArticleGraph reverse BFS from %s → %d additional candidates",
+                            seed_arts, len(reverse_candidates),
+                        )
+
+            # Structural sibling expansion: articles in the same section (or chapter) as the
+            # seed articles. Useful when the answer article is adjacent but not cross-referenced.
+            if USE_STRUCTURAL_SIBLINGS:
+                sibling_budget = min(3, max(0, limit - len(candidates)))
+                if sibling_budget > 0:
+                    seen_candidates = _seen | set(candidates)
+                    siblings_added = 0
+                    for seed in seed_arts[:2]:
+                        siblings = graph.structural_siblings(seed)
+                        for sib in siblings:
+                            if sib not in seen_candidates and sib != "4":
+                                candidates = list(candidates) + [sib]
+                                seen_candidates.add(sib)
+                                siblings_added += 1
+                                sibling_budget -= 1
+                                if sibling_budget <= 0:
+                                    break
+                        if sibling_budget <= 0:
+                            break
+                    if siblings_added:
+                        logger.debug(
+                            "Structural sibling expansion from %s → %d additional candidates",
+                            seed_arts, siblings_added,
+                        )
         else:
             # Fallback: collect from referenced_articles CSV, sort deterministically.
             refs_to_fetch: set[str] = set()
@@ -2196,25 +2421,28 @@ class QueryEngine:
         title_booster = getattr(self, "_title_booster", None)
         tiebreaker = getattr(self, "_tiebreaker", None)
         if para_reranker is not None:
-            # Paragraph-window reranker handles blending and truncation itself
-            postprocessors.append(para_reranker)
-            if title_booster is not None:
+            # Paragraph-window reranker is applied manually in retrieve() so that the
+            # reranker query can be stripped of subordinate article references
+            # (_strip_subordinate_article_refs) before cross-encoder scoring.
+            # title_booster and tiebreaker are also applied there after the reranker.
+            # Do NOT append para_reranker, title_booster, or tiebreaker here.
+            pass
+        else:
+            if self._reranker is not None:
+                if title_booster is not None:
+                    # Use the pre-built wide reranker (top_n=RETRIEVAL_TOP_K) so that
+                    # title boost receives all scored nodes and makes the final truncation.
+                    # _wide_reranker is pre-built in load() as a BlendedReranker so it
+                    # goes through _reranker_lock (unlike SentenceTransformerRerank).
+                    wide_reranker = getattr(self, "_wide_reranker", None) or self._reranker
+                    postprocessors.append(wide_reranker)
+                    postprocessors.append(title_booster)
+                else:
+                    postprocessors.append(self._reranker)
+            elif title_booster is not None:
                 postprocessors.append(title_booster)
-        elif self._reranker is not None:
-            if title_booster is not None:
-                # Widen reranker window so title boost can reshuffle all scored nodes
-                from llama_index.core.postprocessor import SentenceTransformerRerank
-                wide_reranker = SentenceTransformerRerank(
-                    top_n=RETRIEVAL_TOP_K, model=RERANKER_MODEL
-                )
-                postprocessors.append(wide_reranker)
-                postprocessors.append(title_booster)
-            else:
-                postprocessors.append(self._reranker)
-        elif title_booster is not None:
-            postprocessors.append(title_booster)
-        if tiebreaker is not None:
-            postprocessors.append(tiebreaker)
+            if tiebreaker is not None:
+                postprocessors.append(tiebreaker)
 
         return RetrieverQueryEngine.from_args(
             retriever=vector_retriever,

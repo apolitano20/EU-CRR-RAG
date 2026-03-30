@@ -7,6 +7,10 @@ from __future__ import annotations
 
 import re
 
+# Matches sub-article numbers like "429a", "429b", "132c" — digits followed
+# by one or more lowercase letters.  Used by article_family() below.
+_SUB_ARTICLE_RE = re.compile(r"^(\d+)[a-z]+$")
+
 
 def normalise_article(raw: str) -> str:
     """Normalise an article number for comparison.
@@ -18,6 +22,33 @@ def normalise_article(raw: str) -> str:
     s = str(raw).strip().lower()
     s = re.sub(r"\(.*", "", s).strip()
     return s
+
+
+def article_family(article: str) -> str:
+    """Return the article family key for sub-article-aware comparison.
+
+    Sub-articles normalise to their parent:
+        "429a" -> "429",  "429b" -> "429",  "132c" -> "132"
+    Plain numeric articles and annexes are returned unchanged:
+        "429"  -> "429",  "92"   -> "92"
+
+    Used by hit_at_k_family() so that retrieving 429 when the gold is 429b
+    (or vice versa) counts as a family hit.
+    """
+    m = _SUB_ARTICLE_RE.match(article)
+    return m.group(1) if m else article
+
+
+def hit_at_k_family(expected: list[str], retrieved: list[str], k: int) -> int:
+    """1 if any top-k retrieved article is in the same family as any expected article.
+
+    Two articles are in the same family when they share a parent (e.g. 429 and
+    429b both normalise to "429").  This counts within-family swaps (429 retrieved
+    when 429b expected) as hits so stochastic reranker ties inside a sub-article
+    cluster do not produce artificial misses.
+    """
+    expected_families = {article_family(a) for a in expected}
+    return int(any(article_family(a) in expected_families for a in retrieved[:k]))
 
 
 def deduplicate_ranked(articles: list[str]) -> list[str]:
@@ -72,13 +103,14 @@ def compute_all(expected: list[str], retrieved: list[str]) -> dict:
     norm_exp = [normalise_article(a) for a in expected]
     norm_ret = deduplicate_ranked([normalise_article(a) for a in retrieved])
     return {
-        "hit_at_1":      hit_at_k(norm_exp, norm_ret, 1),
-        "recall_at_1":   recall_at_k(norm_exp, norm_ret, 1),
-        "recall_at_3":   recall_at_k(norm_exp, norm_ret, 3),
-        "recall_at_5":   recall_at_k(norm_exp, norm_ret, 5),
-        "mrr":           mrr(norm_exp, norm_ret),
-        "precision_at_3": precision_at_k(norm_exp, norm_ret, 3),
-        "precision_at_5": precision_at_k(norm_exp, norm_ret, 5),
+        "hit_at_1":        hit_at_k(norm_exp, norm_ret, 1),
+        "hit_at_1_family": hit_at_k_family(norm_exp, norm_ret, 1),
+        "recall_at_1":     recall_at_k(norm_exp, norm_ret, 1),
+        "recall_at_3":     recall_at_k(norm_exp, norm_ret, 3),
+        "recall_at_5":     recall_at_k(norm_exp, norm_ret, 5),
+        "mrr":             mrr(norm_exp, norm_ret),
+        "precision_at_3":  precision_at_k(norm_exp, norm_ret, 3),
+        "precision_at_5":  precision_at_k(norm_exp, norm_ret, 5),
     }
 
 

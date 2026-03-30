@@ -17,7 +17,7 @@ import sys
 import threading
 import time
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import AsyncGenerator, Optional
 
 from dotenv import load_dotenv
 
@@ -292,20 +292,35 @@ async def query(request: QueryRequest) -> QueryResponse:
 
 
 @app.post("/api/query/stream")
-async def query_stream(request: QueryRequest) -> StreamingResponse:
+async def query_stream(request: QueryRequest, req: Request) -> StreamingResponse:
     if not _orchestrator.is_loaded():
         raise HTTPException(status_code=503, detail="Index not loaded. Run ingestion first.")
 
     lang = request.preferred_language  # None → orchestrator auto-detects
     history_dicts = [t.model_dump() for t in request.history]
+    cancel = threading.Event()
+
+    async def _event_gen() -> AsyncGenerator[str, None]:
+        try:
+            async for event in _orchestrator.query_stream(
+                request.query,
+                lang,
+                history_dicts,
+                request.max_cross_ref_expansions,
+                cancel=cancel,
+                timeout=_QUERY_TIMEOUT,
+            ):
+                if await req.is_disconnected():
+                    cancel.set()
+                    break
+                yield event
+        except asyncio.TimeoutError:
+            cancel.set()
+            yield 'data: {"type": "error", "message": "Query timed out."}\n\n'
+            yield 'data: {"type": "done"}\n\n'
 
     return StreamingResponse(
-        _orchestrator.query_stream(
-            request.query,
-            lang,
-            history_dicts,
-            request.max_cross_ref_expansions,
-        ),
+        _event_gen(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

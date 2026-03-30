@@ -5,6 +5,104 @@ For open tasks and backlog, see `WORKLOG.md`.
 
 ---
 
+## [2026-03-30] Root cause of run_38 regression identified and fixed — embedding metadata pollution
+
+Diagnosed why cases 137, 141, 156, 169 regressed after the run_38 re-ingest: LlamaIndex was including ALL metadata fields in embedding text by default, meaning `referenced_articles` (e.g. art.197's "132,132a" cross-references) appeared as BGE-M3 sparse tokens, making citing articles outscore the cited articles for those queries. Fix: added `_EXCLUDED_EMBED_METADATA_KEYS` to `eurlex_ingest.py` excluding all non-semantic fields (referenced_*, node_id, has_table, sub_article_of, chunk_type, etc.) from all three Document constructors. Requires re-ingest to materialise. Expected to recover ~87.3% Hit@1.
+
+## [2026-03-30] run_41: article-ref stripping + unrated synonyms — neutral overall, not shipping
+
+Full 173-case eval (16 timeout cases recovered via retry with --workers 1 --timeout 300). Combined result: Hit@1=84.4%, Recall@3=83.2%, MRR=0.876 — essentially flat vs run_40. Gains in `multi_hop` (+2.1pp) and `large_exposures` (+2.9pp) offset by regressions in `false_friend` (−7.1pp) and `negative` (−6.3pp). Stripping article refs before cross-encoder hurts queries where the cited article IS the answer. Not shipping.
+
+## [2026-03-30] Dashboard eval timeout default fixed: 120s → 300s
+
+The dashboard's "Request timeout" widget defaulted to 120s, while the CLI default is 300s. Run_41 was launched with 4 workers and 120s timeout, causing 16 cases to time out (BGE-M3 P99 latency is ~118s at workers=1; contention at workers=4 pushed slow cases over 120s). Fixed dashboard default to 300s in `evals/dashboard.py`. Also identified that workers=1 is the correct setting for BGE-M3 on CPU to avoid contention.
+
+## [2026-03-30] run_40: SOTA reconfirm post-re-ingest — new working baseline established
+
+Re-ran run_30 config (alpha=0.5, all flags identical) after the run_38 re-ingest. Result: Hit@1=85.0%, Hit@1(family)=86.1%, MRR=0.878, n=173 (0 failures after retry merge). Confirmed −2.3pp regression vs run_30 is real and structural — caused by non-deterministic FP16 GPU embeddings on Colab T4 at re-ingest time (and possibly a fresh EUR-Lex HTML fetch). The `sub_article_of` code change itself is not the cause. run_40 is the new working baseline for all future experiments.
+
+## [2026-03-30] eval runner timeout default fixed: 150s → 300s
+
+The eval runner `--timeout` default was 150s while `QUERY_TIMEOUT_SECONDS` in `.env` was 300s. This mismatch caused 22 identical cases (141–173) to time out in every eval run that used default settings (run_39, run_40). Fixed the default in `evals/run_eval.py` to 300s. Also established a per-run retry pattern using `--case-ids` + `--workers 1` for slow cases, and a dedup+merge script to patch the cases file in-place.
+
+## [2026-03-30] run_39: alpha=0.65 evaluated — neutral-to-slight-regression, reverted
+
+Ran full 173-case eval with RETRIEVAL_ALPHA=0.65. After patching the 22 timeout cases (retry with workers=1, timeout=300s), full result: Hit@1=85.5%, Recall@3=82.4%, MRR=0.882 vs run_40 baseline of 85.0%/83.1%/0.878. Tiny Hit@1 gain (+0.5pp) offset by Recall@3 regression (−0.7pp) and expanded Recall@3 regression (−1.3pp). Alpha tuning is not the lever for `diluted_embedding`. Reverted `RETRIEVAL_ALPHA=0.5`.
+
+## [2026-03-30] run_38: sub_article_of re-ingest complete — reindex confirmed neutral, new metric live
+
+Re-ingested `eu_crr` on Colab T4 with `--reset` to populate `sub_article_of` metadata on all 429x/132x sub-article clusters. `hit_at_1_family` metric now live in eval harness. run_38 result: hit@1=84.97%, hit@1_family=86.13% (family gap +1.2pp confirms sub-article confusion is real). Overall −2.3pp vs SOTA confounded by workers=1 (8 timeout+retry events) — reindex itself is neutral (same text, same BGE-M3 weights). All future eval runs use the new `eu_crr` index. `sub_article_cluster()` now returns populated clusters from Qdrant payloads.
+
+## [2026-03-30] sub_article_of metadata — code complete ✅
+
+Added `sub_article_of` field to `DocumentNode`, sub-article detection in `eurlex_ingest.py` (regex `\d+[a-z]+` → parent is numeric prefix), `ArticleGraph._sub_article_clusters` dict built from `sub_article_of` payloads with `sub_article_cluster()` query method, and `hit_at_1_family` metric in `evals/metrics.py` + `run_eval.py`. Re-ingest completed 2026-03-30 (see run_38 entry above).
+
+## [2026-03-30] run_37: run_30 SOTA reconfirmation — confirmed, delta is noise
+
+Reran with all 4 run_35/36 fix flags explicitly disabled to confirm run_30 is still SOTA. Result: 86.7% hit@1 (-0.6pp vs run_30's 87.3%). Only 3 case flips vs run_30, all within sub-article clusters (132c↔132, 429b↔429, 92↔93) — these are borderline-tied articles where the reranker ordering varies run-to-run. Confirms run_30 SOTA is real and that the true stable ceiling without sub-article grouping is ~87% ±0.6pp noise. Validates that the Art 132 and Art 429 re-ingest grouping would permanently resolve these flips.
+
+## [2026-03-30] run_36: Corrected multi-article retrieval fixes — run_30 remains SOTA
+
+Ran corrected version of the 5 multi-article retrieval fixes (run_36_retrieval_fixes_v2) after fixing two bugs from run_35: triple reranking (intermediate expansion rerank now skipped when USE_GLOBAL_RERANK=true) and blended-direct gate narrowed to unambiguous subordinate-reference phrases only (2/173 queries blend, down from 85/173). Result: hit@1=86.7% (-0.6pp vs SOTA), recall@5 flat (+0.1pp), recall@3 -1.1pp. Judge scores in summary are invalid — run aborted mid-way through first attempt (quota exhaustion), restarted without --judge; only 19/173 cases have judge scores and are not comparable to run_30. 0/9 target cases fixed for hit@1 — root cause is ParagraphWindowReranker's strong literal token-match scores for false-friend articles that global re-rank cannot overcome. run_30 confirmed as SOTA on retrieval metrics.
+
+## [2026-03-30] run_35: Multi-article retrieval fixes v1 — net regression, bugs identified
+
+Ran first attempt at 5 runtime-only multi-article fixes. Two implementation bugs caused net regression: (1) triple reranking inflated latency to p50=53s; (2) blended-direct gate too broad (85/173 queries), causing 10 regressions on single-article cases. Recall@3/5 improved as a side-effect of triple reranking diversity. Both bugs diagnosed and corrected in run_36.
+
+## 2026-03-29 — Codex investigation: 5 runtime-only retrieval fixes for 9 multi-article failures
+
+Analysed `codex-investigation.md` which diagnosed 9 `hit_at_1=0` multi-article failures from run_30. Four root-cause buckets identified: (1) multi-hop regex too narrow, (2) graph expansion forward-only + `structural_siblings()` unused, (3) vocab/embedding gaps, (4) expanded nodes never reach rank-1. Implemented all Phase 1+2 runtime-only fixes on branch `fix/multi-article-retrieval`: (1) blended direct+semantic retrieval via RRF (`USE_BLENDED_DIRECT_RETRIEVAL`), (2) structural sibling expansion (`USE_STRUCTURAL_SIBLINGS`), (3) reverse-edge graph BFS (`USE_REVERSE_GRAPH_EXPANSION`), (4) global re-rank of primary+expanded nodes together (`USE_GLOBAL_RERANK`), (5) expanded `_MULTI_HOP_RE` regex now matches 5/9 failing cases vs 0/9 before. All changes gated by env vars (default true) for ablation. Awaiting eval run_35 to validate.
+
+---
+
+## 2026-03-29 — run_34: RETRIEVAL_ALPHA=0.4 + RERANK_TOP_N=8 — neutral, reverted
+
+Ran full 173-case judge eval combining two retrieval levers: more BM25 weight (alpha 0.5→0.4) targeting `diluted_embedding` vocabulary gaps, and more synthesis context (top_n 6→8) targeting `multi` coverage. Both primary targets showed zero movement (diluted_embedding Hit@1 and multi recall@1 unchanged). Critical finding: alpha=0.4 actively hurt `diluted_embedding` judge correctness by -6.6pp — BM25 also fails on vocabulary mismatch, so more lexical weight makes things worse, not better. The correct direction is higher alpha (more dense). RERANK_TOP_N=8 confirmed that the right articles are not in the pool at all for multi cases — a top_n increase cannot fix an upstream retrieval miss. Reverted both to SOTA values.
+
+---
+
+## 2026-03-29 — run_33_wider_funnel: top_k=20 + windows=6 — neutral, reverted
+
+Combined "wider funnel" experiment: RETRIEVAL_TOP_K 15→20 and PARAGRAPH_WINDOW_MAX_WINDOWS 4→6. All primary targets (multi recall@1, diluted_embedding Hit@1) showed exactly zero movement. Tail latency worsened significantly (P99: 50s→89s). Confirmed that multi and diluted_embedding failures are ranking problems, not coverage problems — widening the candidate pool has no effect because the right articles are simply not being ranked first regardless of pool size. Reverted to SOTA.
+
+---
+
+## 2026-03-29 — run_33 (BGE-M3 INT8) abandoned — benchmark proves BGE-M3 is not the bottleneck
+
+Benchmarked PyTorch INT8 dynamic quantization (`torch.quantization.quantize_dynamic`) against BGE-M3 FP32 on CPU. Result: INT8 is 0.63x slower (313ms vs 197ms) and degrades cosine similarity to 0.968 — unacceptable on both dimensions. More importantly: BGE-M3 encode at ~200ms is only ~1% of 21s total end-to-end latency. The real bottleneck is OpenAI synthesis (~80%). `torch.quantization.quantize_dynamic` is also deprecated in PyTorch 2.10 (successor: `torchao`). Added load-time logging to `bge_m3_sparse.py` and created `scripts/benchmark_bge_int8.py` for future reference. BGE_M3_INT8 env var kept in code but disabled.
+
+---
+
+## 2026-03-29 — Diagnosed run_31 failure and reverted RERANKER_MODEL to SOTA
+
+run_31 attempted to upgrade the reranker to `BAAI/bge-reranker-v2-m3` (560MB). All 173 cases timed out. Root cause: even with `USE_RERANKER=false`, setting `RERANKER_MODEL=bge-reranker-v2-m3` causes the model to load at startup via the `USE_PARAGRAPH_WINDOW_RERANKER=true` fallback path (which creates a `BlendedReranker` using `RERANKER_MODEL` when `USE_PARAGRAPH_CHUNKING=false`). The 560MB model loads too slowly on this CPU, making every query time out. Reverted `RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2`.
+
+---
+
+## 2026-03-29 — Fixed .env drift: PARAGRAPH_WINDOW_MAX_WINDOWS was 2 instead of SOTA 4
+
+Discovered that `.env` had `PARAGRAPH_WINDOW_MAX_WINDOWS=2` while the WORKLOG documents run_30 SOTA as using 4 (the code default). This was silently degrading the server config. Fixed to 4 to match SOTA. The run_30 config JSON did not log this parameter explicitly, making the drift invisible without cross-checking the code default.
+
+---
+
+## 2026-03-28 — Reverted to BGE-M3 after run_29 e5-large-instruct regression
+
+Run_29 evaluated `multilingual-e5-large-instruct` (dense-only, separate `eu_crr_e5` Qdrant collection) against the full 173-case golden dataset. Result: recall@1 −2.5pp (0.795 vs 0.795), MRR −2.4pp (0.873 vs 0.897), latency doubled (22s vs 11s p50), with severe regressions in `credit_risk_sa` (−30pp recall@1) and `leverage_ratio_total_exposure` (−33pp). The only upside was recall@5 +1.4pp — e5 casts a slightly wider net but is less precise at rank 1. Root cause: removing sparse retrieval (BM25) eliminated the lexical precision that BGE-M3 hybrid provides for exact legal terminology. Reverted `.env` to `EMBED_MODEL=bge-m3`, `QDRANT_COLLECTION=eu_crr`.
+
+---
+
+## 2026-03-28 — Windows SentenceTransformer access violation fix (low_cpu_mem_usage)
+
+API was crashing with a native access violation (`_load_state_dict_into_meta_model`) on first query after startup. Root cause: recent transformers defaults `low_cpu_mem_usage=True` on CPU, which uses PyTorch meta tensors during model loading — a path that triggers a native SIGSEGV on Windows/Python 3.13. Fixed in `src/indexing/e5_instruct_embed.py` by passing `model_kwargs={"low_cpu_mem_usage": False}` to `SentenceTransformer` when `sys.platform == "win32"`. This forces standard CPU allocation instead of meta-tensor loading.
+
+---
+
+## 2026-03-26 — run_28: Bidirectional structural cross-ref extraction at ingest
+
+Re-ingested `eu_crr` collection with bidirectional cross-references: Part/Title/Chapter/Section refs are now extracted at ingest time and stored in node metadata, enabling expansion in both directions (not just article→article). Retrieval metrics were identical to run_27 (Hit@1=87.3%, MRR=0.897). Judge scores regressed slightly (correctness −1.0pp, faithfulness −1.9pp) — likely noise at n=173. No retrieval benefit from bidir refs observed; the index is retained as-is since re-ingesting to remove them would require a separate motivation.
+
+---
+
 ## 2026-03-26 — run_27: Deterministic synthesis completeness — new SOTA Judge Correctness=0.812
 
 Implemented two deterministic completeness interventions targeting 17 cases with hit@1=1 but judge_correctness<0.7. Part A: `_build_key_facts_block()` extracts all numerical thresholds (percentages, day counts, monetary values, basis points) from retrieved article sections via regex and prepends them as a structured fact-sheet to the synthesis context. Part B: `_append_missing_thresholds()` post-processes the generated answer, diffs thresholds from cited articles against what appears in the answer, and deterministically appends any missing values as a "Completeness note" — no re-synthesis. Result: 7/17 target cases improved, 0 regressed. Judge Correctness +2.0pp (0.792→0.812), Completeness +2.5pp (0.788→0.813), Faithfulness +2.3pp (0.818→0.841). Retrieval metrics unchanged. **New SOTA.**

@@ -1,15 +1,19 @@
 """
 BGE-M3 sparse encoding helpers for Qdrant hybrid search, plus a LlamaIndex
 BaseEmbedding wrapper (BGEm3Embedding) that reuses the same singleton to avoid
-loading a second copy of the 570 MB model in memory.
+loading a second copy of the 570 MB model in memory. 
 
-Thread-safe via double-checked locking.
+Thread-safe via double-checked locking. 
 """
 from __future__ import annotations
 
+import logging
 import threading
+
 from llama_index.core.embeddings import BaseEmbedding
 from pydantic import ConfigDict
+
+logger = logging.getLogger(__name__)
 
 _model = None
 _model_lock = threading.Lock()
@@ -30,13 +34,27 @@ def _get_model():
     if _model is None:
         with _model_lock:
             if _model is None:
+                import time
+
                 import torch
                 from FlagEmbedding import BGEM3FlagModel
-                _model = BGEM3FlagModel("BAAI/bge-m3", use_fp16=True)
+
+                t0 = time.perf_counter()
+                m = BGEM3FlagModel("BAAI/bge-m3", use_fp16=True)
+                logger.info("BGE-M3 loaded in %.1fs", time.perf_counter() - t0)
+
                 # FlagEmbedding 1.x doesn't reliably honour a device= constructor
                 # arg — explicitly move to CUDA if available.
+                # Assign to _model only after CUDA setup is complete so that
+                # the outer double-checked locking never observes a partially
+                # initialised singleton (race: _model set, .to("cuda") pending).
                 if torch.cuda.is_available():
-                    _model.model = _model.model.to("cuda")
+                    m.model = m.model.to("cuda")
+                    logger.info("BGE-M3: moved to CUDA.")
+                else:
+                    logger.info("BGE-M3: running on CPU (FP32).")
+
+                _model = m
     return _model
 
 

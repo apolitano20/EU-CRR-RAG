@@ -37,6 +37,9 @@ class DocumentNode:
     referenced_sections: str = ""            # comma-separated Arabic numbers, e.g. "1,2"
     has_table: bool = False
     has_formula: bool = False
+    # Sub-article grouping: set to parent article number for numbered sub-articles
+    # e.g. sub_article_of="429" for Articles 429a, 429b, 429c, 429e, …
+    sub_article_of: Optional[str] = None
     # Paragraph-chunking fields (populated for PARAGRAPH-level nodes only)
     chunk_type: str = "ARTICLE"               # "ARTICLE" or "PARAGRAPH"
     parent_article_id: Optional[str] = None   # e.g. "art_92_en" for PARAGRAPH nodes
@@ -65,6 +68,7 @@ class DocumentNode:
             "referenced_sections": self.referenced_sections,
             "has_table": self.has_table,
             "has_formula": self.has_formula,
+            "sub_article_of": self.sub_article_of or "",
             "chunk_type": self.chunk_type,
             "parent_article_id": self.parent_article_id or "",
             "para_id": self.para_id or "",

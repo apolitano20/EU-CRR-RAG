@@ -2,6 +2,150 @@
 
 ---
 
+## [2026-03-30] LlamaIndex embeds ALL metadata by default — exclude non-semantic fields explicitly
+
+**Context:** Diagnosing why cases 137, 141, 156 regressed after the run_38 re-ingest despite identical code and model weights.
+**What happened / insight:** LlamaIndex's `Document.get_content(metadata_mode='embed')` includes every key from `metadata` dict in the embedding text unless `excluded_embed_metadata_keys` is set. The `referenced_articles` field (e.g. art.197 has `referenced_articles: 132,132a`) injects article numbers as BGE-M3 sparse tokens. For a query about art.132's content, art.197 scores higher than art.132 itself because "132" appears in art.197's metadata text but art.132's metadata only has `article: 132`. This is a systematic ranking inversion: articles that *reference* the answer outscore the answer. Fix: set `excluded_embed_metadata_keys` on every Document to exclude all non-semantic fields (referenced_*, structural IDs, boolean flags, sub_article_of).
+**Take-away:** Always set `excluded_embed_metadata_keys` when creating LlamaIndex Documents with rich metadata. Keep only semantically meaningful fields in the embedding: `article`, `article_title`, `part/title/chapter/section`, `language`. Everything else (cross-references, structural IDs, flags) is for Qdrant filtering only — it must not contaminate the embedding.
+
+---
+
+## [2026-03-30] BGE-M3 on CPU cannot handle 4 parallel workers without latency collapse
+
+**Context:** run_41 was launched from the dashboard with 4 workers and 120s timeout. 16 cases timed out despite the same cases completing fine in single-worker runs.
+**What happened / insight:** BGE-M3 P99 latency at workers=1 is ~118s. With 4 concurrent workers, CPU contention pushes slow queries well past 120s. run_40 (workers=1) had 0 failures; run_41 (workers=4) had 16 failures on the exact same cases. The dashboard defaulted to 120s timeout (vs CLI's 300s), compounding the problem.
+**Take-away:** Use workers=1 for all BGE-M3-on-CPU eval runs. The model is the CPU bottleneck — parallelism degrades rather than improves throughput. Dashboard eval timeout default has been raised to 300s to match the CLI default.
+
+---
+
+## [2026-03-30] Eval runner timeout must match server timeout — mismatch causes silent recurring failures
+
+**Context:** Every eval run (run_39, run_40) produced exactly 22 timeout failures on cases 141–173, despite the server being configured with `QUERY_TIMEOUT_SECONDS=300`.
+**What happened / insight:** The eval runner `--timeout` defaulted to 150s while the server allowed 300s. The same 22 slow cases (all hard, from new categories like CIU/securitisation) consistently exceeded 150s but completed within 300s. Changing `workers` (1, 2, 4) made no difference — the cases themselves are inherently slow. The fix was one line: change the default in `run_eval.py` from 150 to 300.
+**Take-away:** Keep `--timeout` in `run_eval.py` in sync with `QUERY_TIMEOUT_SECONDS` in `.env`. Any time `QUERY_TIMEOUT_SECONDS` changes, update the eval runner default too. A 22-case recurring failure pattern that maps to identical case IDs across runs is a timeout mismatch, not a retrieval bug.
+
+---
+
+## [2026-03-30] Re-ingesting on GPU produces different vectors — non-deterministic FP16 arithmetic
+
+**Context:** run_40 reconfirmed run_30 config after the run_38 re-ingest and found a −2.3pp Hit@1 regression on 4 hard cases despite identical code and settings.
+**What happened / insight:** `bge_m3_sparse.py` uses `use_fp16=True` and moves to CUDA when available. Colab T4 runs BGE-M3 in FP16 with non-deterministic cuDNN operations by default. Two successive ingests of the same text on T4 produce slightly different embedding vectors. These differences are small enough to be invisible on easy cases but flip borderline cosine rankings on hard cases. Cases 137 and 156 showed score drops too large for float noise (0.945→0.342 and 0.940→0.469) suggesting EUR-Lex HTML may also have changed between ingest runs.
+**Take-away:** A re-ingest is NOT retrieval-neutral even with identical code and model. If reproducibility matters, either (1) snapshot the Qdrant collection before re-ingesting, or (2) set `torch.backends.cudnn.deterministic = True` and `torch.use_deterministic_algorithms(True)` in the ingest notebook before running BGE-M3. Also: avoid re-ingesting from EUR-Lex live URL if the index content matters — cache the HTML locally first.
+
+---
+
+## [2026-03-30] Family-based deduplication hurts multi-article recall — use eval metric instead
+
+**Context:** Implementing `sub_article_of` grouping for 429x sub-article cluster confusion. The natural fix seemed to be: group 429/429a/429b/429c under key "429" in `ArticleDeduplicatorPostprocessor` so only one representative per family appears in results.
+**What happened / insight:** Grouping sub-articles in the deduplicator would reduce recall for multi-article queries where multiple family members are expected (e.g. case_172 expects [429, 429b, 429c] — grouping collapses these to a single slot in the top-k). The right fix is eval-side: add `hit_at_1_family` metric that normalises both expected and retrieved article numbers to their family root before matching. This eliminates the stochastic flip penalty (429 retrieved when 429b expected) without touching retrieval or reducing context diversity.
+**Take-away:** When sub-article cluster confusion manifests as stochastic hit@1 flips (different ordering each run), the root cause is a measurement problem (strict article-id equality is too harsh for within-family swaps), not a retrieval problem. Fix the metric first; only change retrieval if the family metric still shows a gap.
+
+---
+
+## [2026-03-30] Recall gains from a latency bug are not real gains
+
+**Context:** run_35 showed recall@3 +1.8pp and recall@5 +4.3pp vs SOTA. These were reported as promising. run_36 fixed the underlying bugs (triple reranking) and the gains disappeared entirely.
+**What happened / insight:** The triple-reranking bug (ParagraphWindowReranker called 3× per query) accidentally increased result diversity in the top-5 pool, surfacing articles that the single-pass reranker would demote. When the bug was fixed, recall reverted to baseline. The lesson: metric gains that come paired with a 2.5× latency regression warrant bug investigation before celebrating.
+**Take-away:** When a recall improvement is accompanied by a major latency regression, treat the recall gain as suspect. Profile reranker call count before attributing recall gains to the intended change.
+
+---
+
+## [2026-03-30] ParagraphWindowReranker literal token-match is too strong for global re-rank to fix hit@1
+
+**Context:** All 5 multi-article retrieval fixes (run_35/36) failed to improve hit@1 on any of the 9 target cases, despite the right articles now appearing in the recall@5 pool.
+**What happened / insight:** The ParagraphWindowReranker scores articles by best-matching paragraph window. When a query contains "Article 36(1)(d)" as a subordinate reference (e.g. "deducted under Article 36(1)(d)"), the reranker finds "Article 36(1)(d)" text in Article 36 and assigns it a very high score. A global re-rank pass cannot overcome this because it uses the same reranker. The subordinate-reference article wins at rank-1 regardless of what other articles are in the pool.
+**Take-away:** For false-friend/subordinate-reference failures, the fix must be query-side (strip or downweight cited article numbers before embedding/reranking), not pool-side (adding more articles). Global re-rank is ineffective when the reranker signal itself is the source of the error.
+
+---
+
+## [2026-03-30] Blended direct retrieval regex must be conservative — ambiguous patterns cause regressions
+
+**Context:** run_35 blended-direct gate matched 85/173 queries including "according to Article X", "referred to in Article X", and "under Article X" — causing 10 regressions on queries where the cited article IS the answer.
+**What happened / insight:** The original `_SUBORDINATE_ART_RE` included patterns like "under", "according to", "referred to in" — all of which are ambiguous. "Calculate capital requirements under Article 92" means Article 92 IS the answer, not a subordinate reference. Only patterns where the cited article is unambiguously legal basis (not subject) are safe to blend: "as per", "pursuant to", "deducted from/under", "excluded from/under", "calculated under/pursuant to", "in accordance with". Tightening to these 6 patterns reduced blend from 85/173 → 2/173 and eliminated all 10 regressions.
+**Take-away:** Any regex that gates a retrieval path change must be validated against failing cases AND confirmed harmless on passing cases before running a full eval. For blended-direct specifically: test every pattern against 5–10 single-article cases to confirm the cited article remains rank-1 when blending is active.
+
+---
+
+## [2026-03-29] Graph expansion and structural siblings were already built — just never called
+
+**Context:** Investigating why 9 multi-article queries had hit@1=0 despite an ArticleGraph being in place.
+**What happened / insight:** The codebase already had `structural_siblings()` in `article_graph.py` and reverse edges built via `build_from_qdrant()`, but neither was ever called at query time. `bfs_expand()` accepted a `direction` parameter but was only invoked with the default "forward". The investigation also found that `_MULTI_HOP_RE` matched 0/9 failing queries (all bypassed the multi-hop routing path) and that `_detect_direct_article_lookup()` hard-anchored case_171 to Article 36 instead of the actual answer articles 429/429a. All 5 fixes were runtime-only (no re-ingest) and gated by env vars.
+**Take-away:** Before designing new retrieval mechanisms, inventory what's already implemented but unused (`structural_siblings`, reverse edges, etc.). Read the full graph/expansion code — sometimes the capability exists but the call site is missing. Also: narrow regex routing patterns (like `_MULTI_HOP_RE`) will silently fail for implicit multi-article queries — test them against failing cases before assuming they work.
+
+---
+
+## [2026-03-29] diluted_embedding needs more dense signal, not more BM25
+
+**Context:** run_34 tried `RETRIEVAL_ALPHA=0.4` (more BM25 weight) to fix vocabulary-mismatch failures in the `diluted_embedding` slice.
+**What happened / insight:** Alpha=0.4 hurt `diluted_embedding` judge correctness by -6.6pp compared to SOTA alpha=0.5. The reasoning was backwards: vocabulary-mismatch failures happen because the query uses plain language and the article uses legal jargon — BM25 fails on this too (no token overlap regardless of weight). Only dense embeddings can bridge the semantic gap. More BM25 weight crowds out the only signal that works. The correct direction is higher alpha (0.6+, more dense) or targeted synonym additions that give BM25 something to match against.
+**Take-away:** For `diluted_embedding` failures, always increase alpha (more dense) rather than decrease it. BM25 synonym expansion is only useful if the specific missing terms are added to `_SYNONYM_MAP`. Blind alpha reduction is counterproductive.
+
+---
+
+## [2026-03-29] Retrieval funnel widening cannot fix ranking failures — check root cause first
+
+**Context:** runs 33 and 34 tried top_k=20, windows=6, and RERANK_TOP_N=8 to improve `multi` (recall@1=29.7%) and `diluted_embedding` (Hit@1=33%).
+**What happened / insight:** All three parameters moved zero on both target slices across two separate eval runs. The diagnosis after the fact: these are ranking failures (wrong article ranked first) or pool misses (right article not retrieved at all), not coverage failures. Widening the funnel only helps when the right answer is in the pool but not reaching synthesis — which requires verifying via case-level trace before running an eval. Two eval runs (~6h, ~$30 in judge costs) were spent confirming what a 5-minute case trace would have shown.
+**Take-away:** Before running a funnel-widening experiment (top_k, windows, top_n), trace 2-3 failing cases manually to confirm the right article is in the pool. If it's not, no amount of widening will help. If it is, widening is the right lever.
+
+---
+
+## [2026-03-29] RERANKER_MODEL affects load path even when USE_RERANKER=false
+
+**Context:** run_31 set `RERANKER_MODEL=BAAI/bge-reranker-v2-m3` to test the multilingual reranker but kept `USE_RERANKER=false`. All 173 cases timed out.
+**What happened / insight:** The `USE_PARAGRAPH_WINDOW_RERANKER=true` path in `query_engine.py` creates a `BlendedReranker` using `RERANKER_MODEL` as a fallback when `USE_PARAGRAPH_CHUNKING=false` and `use_reranker=False`. This is not gated on `USE_RERANKER`. So setting `RERANKER_MODEL` to a 560MB model causes it to load at every server startup regardless of the `USE_RERANKER` flag, as long as paragraph-window reranking is active.
+**Take-away:** `RERANKER_MODEL` is not just a label — it is always loaded when `USE_PARAGRAPH_WINDOW_RERANKER=true`, irrespective of `USE_RERANKER`. Never set `RERANKER_MODEL` to a large model (>100MB) on this machine. If testing a heavy reranker, disable `USE_PARAGRAPH_WINDOW_RERANKER` first or use a machine with more resources.
+
+---
+
+## [2026-03-29] BGE-M3 is ~1% of total latency — INT8 quantization is the wrong target
+
+**Context:** Planned run_33 to quantize BGE-M3 with INT8 to reduce end-to-end latency.
+**What happened / insight:** Benchmark showed BGE-M3 encodes a single query in ~197ms FP32. End-to-end latency is ~21s P50. BGE-M3 is 197/21000 ≈ 1% of total latency. The bottleneck is OpenAI synthesis (~80%). INT8 quantization was also slower (313ms, 0.63x) and degraded cosine similarity to 0.968 on this CPU. `torch.quantization.quantize_dynamic` is deprecated in PyTorch 2.10.
+**Take-away:** Profile before optimising. The efficiency bottleneck analysis in WORKLOG was written before actual per-component timing was measured. BGE-M3 CPU inference is not the bottleneck; OpenAI synthesis is. Any latency experiment should target synthesis (model swap, streaming, context truncation) not embedding.
+
+---
+
+## [2026-03-29] .env can drift silently from SOTA — cross-check code defaults when verifying config
+
+**Context:** Verifying that `.env` matched run_30 SOTA before running new experiments.
+**What happened / insight:** `PARAGRAPH_WINDOW_MAX_WINDOWS=2` was in `.env` while the SOTA config uses 4 (the code default). The run_30 config JSON did not log this parameter, making the drift invisible. The server had been running with suboptimal window count for multiple sessions without detection.
+**Take-away:** When verifying SOTA config in `.env`, cross-check against code-level defaults for any parameter not explicitly in the config JSON. The safest approach: after each experiment revert, grep the code for all `os.getenv(...)` defaults and confirm `.env` matches the intended SOTA values for each, or explicitly comment them out to rely on the code default.
+
+---
+
+## [2026-03-28] Windows: SentenceTransformer crashes with access violation — disable low_cpu_mem_usage
+
+**Context:** API crashing on first query after startup with a native access violation deep in `_load_state_dict_into_meta_model` (transformers), called from `sentence_transformers/models/Transformer.py`.
+**What happened / insight:** Recent versions of HuggingFace transformers default to `low_cpu_mem_usage=True` on CPU loads. This uses PyTorch meta tensors during weight loading — a path that triggers a native SIGSEGV on Windows/Python 3.13. The crash is unrecoverable (kills the process) and cannot be caught by `except Exception`. The fix is to pass `model_kwargs={"low_cpu_mem_usage": False}` to the `SentenceTransformer` constructor on Windows. This is already done in `e5_instruct_embed.py`. The BGE-M3 model (FlagEmbedding) uses a different loading path and is not affected. `sentence_transformers` >= 5.x supports `model_kwargs` natively.
+**Take-away:** Any new `SentenceTransformer` model loading on Windows must pass `model_kwargs={"low_cpu_mem_usage": False}` when `sys.platform == "win32"`. If a new embedding wrapper is added, apply this guard from the start.
+
+---
+
+## [2026-03-28] Dense-only embeddings lose sparse precision for legal terminology — BGE-M3 hybrid wins
+
+**Context:** run_29 evaluated `multilingual-e5-large-instruct` (dense-only) as an alternative to BGE-M3 (dense+sparse hybrid), targeting `diluted_embedding` failures.
+**What happened / insight:** e5 regressed significantly on recall@1 (−2.5pp) and MRR (−2.4pp), with severe category-level drops in `credit_risk_sa` (−30pp) and `leverage_ratio_total_exposure` (−33pp). The marginal recall@5 gain (+1.4pp) shows e5 is slightly broader but not more precise. The BM25 sparse component in BGE-M3 hybrid is doing real work — exact legal terms like article numbers, defined terms (e.g. "TREA", "CET1"), and threshold values match via lexical lookup that dense vectors miss. Latency also doubled (22s vs 11s p50) as the 560MB e5 model is slower than BGE-M3 on CPU despite similar parameter counts.
+**Take-away:** For a legal/regulatory domain corpus with precise terminology, dense-only embeddings are strictly worse than BGE-M3 hybrid. Do not revisit dense-only alternatives unless a model specifically trained on legal text is available. The `diluted_embedding` failures require a different solution (synonym expansion, ToC routing) — not a model swap.
+
+---
+
+## [2026-03-28] Workers > 1 on Windows causes cascading timeouts — use --workers 1 for all evals
+
+**Context:** Considering running eval with `--workers 4` to speed up runs after fixing the API crash.
+**What happened / insight:** The Windows workaround in `api/main.py` runs queries synchronously in the asyncio event loop (main thread) to avoid PyTorch access violations in thread pools. This blocks the event loop for the full query duration (~20s p50). With 4 concurrent eval workers, requests queue behind each other; with a 150s timeout and ~20–26s per query, 4 queued requests → effective wait of ~60–80s before execution, causing cascading timeouts well before the 150s deadline. Run_29's 169/173 failures were from a crash (not workers), but workers > 1 would have caused most of them to time out anyway.
+**Take-away:** On Windows, always run evals with `--workers 1`. The blocking-in-event-loop design is explicitly noted in `main.py` as single-worker only. Multi-worker eval is only safe on Linux/Mac where `asyncio.to_thread` is used.
+
+---
+
+## [2026-03-28] Re-ingesting with a marginal feature ties your index to that feature — defer ingest-only changes
+
+**Context:** run_28 re-ingested `eu_crr` with bidirectional cross-refs baked in. The feature showed no retrieval gain and slight judge regressions.
+**What happened / insight:** Because the bidir cross-refs are in the index metadata, we cannot "turn them off" without a full re-ingest. The run_27 SOTA index is gone. We are now permanently on the run_28 index until the next re-ingest. The judge regression (~1pp) is likely within noise, but the point stands: every re-ingest should be justified by a clear expected gain, because it resets the index baseline and makes rollback expensive.
+**Take-away:** Before triggering a re-ingest for a metadata-only change (no embedding change), require a strong prior that the feature will improve retrieval. If uncertain, prototype the feature as a runtime filter/expansion (no ingest needed) first. Reserve re-ingests for changes with high expected impact (embedding model swap, chunking strategy) or when multiple changes can be batched.
+
+---
+
 ## [2026-03-26] Prompt completeness instructions are stochastic — use deterministic pre/post processing instead
 
 **Context:** Considering whether to add a "enumerate ALL thresholds" instruction to the synthesis prompt to fix the 17 cases where hit@1=1 but judge_correctness<0.7.

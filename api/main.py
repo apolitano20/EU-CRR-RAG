@@ -237,6 +237,18 @@ class FeedbackResponse(BaseModel):
     filename: str
 
 
+class FeedbackItem(BaseModel):
+    filename: str
+    created_at: str
+    query: str
+    feedback: str
+
+
+class FeedbackListResponse(BaseModel):
+    items: list[FeedbackItem]
+    total: int
+
+
 # ------------------------------------------------------------------
 # Endpoints
 # ------------------------------------------------------------------
@@ -407,6 +419,38 @@ def submit_feedback(request: FeedbackRequest) -> FeedbackResponse:
     (cases_dir / filename).write_text("\n".join(lines), encoding="utf-8")
     logger.info("Feedback saved to evals/cases/manual_cases/%s", filename)
     return FeedbackResponse(status="ok", filename=filename)
+
+
+@app.get("/api/feedback", response_model=FeedbackListResponse)
+def list_feedback() -> FeedbackListResponse:
+    from pathlib import Path
+    import datetime
+
+    cases_dir = Path("evals/cases/manual_cases")
+    if not cases_dir.exists():
+        return FeedbackListResponse(items=[], total=0)
+
+    items: list[FeedbackItem] = []
+    for f in sorted(cases_dir.glob("case_*.md")):
+        content = f.read_text(encoding="utf-8")
+        lines = content.splitlines()
+
+        query = ""
+        feedback = ""
+        section = None
+        for line in lines:
+            if line.startswith("## "):
+                section = line[3:].strip()
+            elif section == "Query" and line.strip() and not query:
+                query = line.strip()
+            elif section == "Feedback / Notes" and line.strip() and not feedback:
+                feedback = line.strip()
+
+        stat = f.stat()
+        created_at = datetime.datetime.fromtimestamp(stat.st_mtime, tz=datetime.timezone.utc).isoformat()
+        items.append(FeedbackItem(filename=f.name, created_at=created_at, query=query, feedback=feedback))
+
+    return FeedbackListResponse(items=items, total=len(items))
 
 
 @app.post("/api/ingest", response_model=IngestResponse)

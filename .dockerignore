@@ -18,3 +18,15 @@ frontend/.next/
 frontend/node_modules/
 data/
 *.log
+
+# Large runtime artifacts — not needed in image
+evals/
+research_docs/
+chroma_db/
+toc/
+crr_raw_*.html
+CRR_ToC.html
+codex*.md
+grok_review_prompt.md
+scripts/
+*.tmp

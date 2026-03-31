@@ -113,14 +113,20 @@ export default function ChatPanel({ onArticleSelect, onArticleNotFound, selected
           )}
 
           {isLoading && !streamingAnswer && (
-            <div className="space-y-2.5 animate-pulse mt-1">
-              {[72, 55, 83, 40, 68].map((w, i) => (
-                <div
-                  key={i}
-                  className="h-3 bg-slate-100 rounded"
-                  style={{ width: `${w}%` }}
-                />
-              ))}
+            <div className="mt-1 space-y-3">
+              <div className="flex items-center gap-2 text-xs text-slate-400">
+                <span className="inline-block w-3.5 h-3.5 rounded-full border-2 border-slate-300 border-t-slate-500 animate-spin" />
+                Retrieving CRR content…
+              </div>
+              <div className="space-y-2.5 animate-pulse">
+                {[72, 55, 83, 40, 68].map((w, i) => (
+                  <div
+                    key={i}
+                    className="h-3 bg-slate-100 rounded"
+                    style={{ width: `${w}%` }}
+                  />
+                ))}
+              </div>
             </div>
           )}
 

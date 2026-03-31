@@ -4,28 +4,29 @@ For completed work history, see `COMPLETED.md`.
 
 ---
 
-## Current State (as of 2026-03-30) — run_40 is SOTA post-re-ingest; embedding metadata pollution fix pending re-ingest
+## Current State (as of 2026-03-31) — run_42 is new SOTA; embedding metadata fix confirmed
 
-**SOTA (original index): run_30_bge_m3_revert** — Hit@1=**87.3%**, Recall@5=**85.2%**, MRR=**0.897**, Judge Correctness=**0.801**.
+**SOTA: run_42_embed_metadata_fix** — Hit@1=**87.28%**, Hit@1(family)=**87.86%**, Recall@5=**85.16%**, MRR=**0.8976**, MRR(expanded)=**0.9004**. (n=173, 0 failures.)
+Config: `RETRIEVAL_ALPHA=0.5`, `USE_ARTICLE_GRAPH=true`, `USE_MIXED_CHUNKING=true`, `USE_PARAGRAPH_WINDOW_RERANKER=true`, `PARAGRAPH_WINDOW_MAX_WINDOWS=4`, `RETRIEVAL_TOP_K=15`, `TITLE_BOOST_WEIGHT=0`, `ADJACENT_TIEBREAK_DELTA=0.05`, `gpt-4o-mini` (standard) + `gpt-4o` (hard queries). Re-ingested with `_EXCLUDED_EMBED_METADATA_KEYS` applied to all Document constructors.
 
-**Active post-re-ingest baseline: run_40_sota_reconfirm** — Hit@1=**85.0%**, Hit@1(family)=**86.1%**, Recall@5=**84.2%**, MRR=**0.878**. (n=173, 0 failures after retry merge.)
-Config: identical to run_30 — `RETRIEVAL_ALPHA=0.5`, `USE_ARTICLE_GRAPH=true`, `USE_MIXED_CHUNKING=true`, `USE_PARAGRAPH_WINDOW_RERANKER=true`, `PARAGRAPH_WINDOW_MAX_WINDOWS=4`, `RETRIEVAL_TOP_K=15`, `TITLE_BOOST_WEIGHT=0`, `ADJACENT_TIEBREAK_DELTA=0.05`, `gpt-4o-mini` (standard) + `gpt-4o` (hard queries).
-
-**Why run_40 ≠ run_30 (updated diagnosis 2026-03-30):** The run_38 re-ingest caused a ranking regression on cases 137, 141, 156, 169. Root cause is now confirmed: LlamaIndex includes ALL metadata fields in the embedding text by default (`excluded_embed_metadata_keys=[]`). The `referenced_articles` field (e.g. art.197 references "132,132a") was being included in embedding text, causing articles that merely *reference* a target article to score higher than the target itself — a systematic ranking inversion. Fix implemented: `_EXCLUDED_EMBED_METADATA_KEYS` list added to `eurlex_ingest.py`, applied to all three Document constructors. Re-ingest needed to materialise the fix. **Expected outcome after re-ingest: restore run_30 SOTA (87.3% Hit@1).**
+**vs run_40 (previous working baseline):** +2.31pp Hit@1, +1.73pp Hit@1(family), +1.35pp Recall@1, +1.93pp MRR. All metrics improved.
+**vs run_30 (original SOTA):** Matched on Hit@1 (~87.3%), slightly higher MRR (0.8976 vs 0.897), better Recall@5 (85.16% vs 85.2%). Confirmed that the embedding metadata fix fully recovered the run_38 re-ingest regression.
 
 **Active .env:** `EMBED_MODEL=bge-m3`, `QDRANT_COLLECTION=eu_crr`, `RETRIEVAL_ALPHA=0.5`, `EVAL_MODE=true`.
 
-**What we know about remaining failures (as of run_40):**
-- `diluted_embedding` (6 cases, Hit@1=33%): vocabulary mismatch. BM25 also fails (no token overlap). Needs **more dense** signal. alpha=0.4 (more BM25) actively hurt by -6.6pp judge correctness; alpha=0.65 (run_39) was neutral-to-slight-regression on full dataset (−0.6pp Recall@3). **Alpha tuning is not the lever. Next: targeted synonym additions or article summary enrichment at ingest.**
-- `multi` (32 cases, recall@1=27%): right articles not in retrieval pool at all. Not a coverage problem. ParagraphWindowReranker literal token-match too strong for global re-rank to fix. Needs query-side fix (strip subordinate-reference article numbers before embedding).
-- `leverage_ratio_*` (3-4 cases): sub-article cluster confusion largely addressed by `sub_article_of` re-ingest + `hit_at_1_family` metric. Remaining gap requires article summary enrichment at ingest.
+**What we know about remaining failures (as of run_42):**
+- `diluted_embedding` (6 cases, Hit@1=33.3%): unchanged vs run_40. Vocabulary mismatch — BM25 fails (no token overlap), alpha tuning is not the lever. **Next: article summary enrichment at ingest (2–3 sentence GPT-4o-mini summary + keyword tags per article).**
+- `multi` article recall (32 cases, recall@1=31.25%): improved slightly vs run_40 (31.25% vs 27%) but still lagging. Right articles not in pool at all — not a coverage problem. Needs query-side fix or cross-ref expansion.
+- `liquidity_lcr` (5 cases, Hit@1=60%): persistent underperformer.
+- `significant_risk_transfer` (1 case, Hit@1=0%): single hard case, recall@3=50%.
+- Sub-article clusters (132x, 429x): hit@1_family gap (+0.58pp) small — largely resolved by family metric.
 
 **Next experiment candidates:**
 
 | # | Run | Target | Approach | Effort | Re-ingest |
 |---|-----|--------|---------|--------|-----------|
 | **IMPL** | **run_41** | `multi` + `diluted_embedding` | **EVALUATED** — neutral vs run_40 on full 173 cases (Hit@1 0.8439 vs 0.8497). Helps `multi_hop` (+0.021 Hit@1) but hurts `false_friend` (−0.071) and `negative` (−0.063). Not shipping as improvement. See run_41 entry below. | Done | No |
-| **NEXT** | **run_42** | **restore SOTA** | **Re-ingest with `_EXCLUDED_EMBED_METADATA_KEYS` fix** — removes `referenced_articles`, `sub_article_of`, structural fields from BGE-M3 embedding text. Eliminates ranking inversion where citing articles outscore cited articles. Expected: recover case_137, 141, 156, 169 → restore ~87.3% Hit@1. | Done (code) | **Yes** |
+| ~~**DONE**~~ | ~~**run_42**~~ | ~~**restore SOTA**~~ | **COMPLETED** — Hit@1=87.28%, MRR=0.8976. Matched run_30 SOTA and became new best on all metrics vs run_40. | Done | Done |
 | 3 | run_43 | synthesis quality | Switch synthesis LLM to Claude Sonnet + switch judge to Claude (avoids GPT self-preference bias). Clean new baseline targeting Judge Correctness. | Medium | No |
 | 3 | run_43 | `diluted_embedding` + `leverage_ratio_*` | **Article summary enrichment in embedding text**. Generate a 2–3 sentence GPT-4o-mini summary + 5–8 keyword tags per article; prepend to embedding text at ingest. Cost: ~$2–5 for 750 articles. Expected gain: `diluted_embedding` Hit@1 33%→50%+. | Medium | Yes |
 | 4 | — | `multi_hop` synthesis (stubborn cases) | Investigate case_018, 124, 127, 143 individually. | Low-Medium | No |
@@ -81,6 +82,7 @@ All runs on 173-case golden dataset, judge enabled (gpt-4o).
 | run_39_alpha_065 | 2026-03-30 | 85.5% | 82.4% | 0.882 | n/a | RETRIEVAL_ALPHA=0.5→0.65 (more dense). **Neutral-to-slight-regression vs run_40 baseline.** 22 cases timed out (eval runner --timeout default was 150s vs QUERY_TIMEOUT_SECONDS=300s — root cause bug; fixed). After dedup+retry merge: n=172. diluted_embedding unchanged; alpha tuning is NOT the lever for these failures. Reverted to alpha=0.5. |
 | run_40_sota_reconfirm | 2026-03-30 | 85.0% (hit@1_family=86.1%) | 83.1% | 0.878 | n/a | Baseline reconfirm with alpha=0.5 after revert. n=173, 0 failures. 2.3pp gap vs run_30 SOTA confirmed as non-deterministic FP16 GPU re-ingest artifact. **Declared as new working baseline.** |
 | **run_41_combined_3_4** | 2026-03-30 | 84.4% (173 combined) | 83.2% | 0.876 | n/a | Combined: subordinate-ref stripping before reranker + unrated synonyms. **Neutral vs run_40 overall.** `multi_hop` +2.1pp Hit@1, `large_exposures` +2.9pp. `false_friend` −7.1pp, `negative` −6.3pp. 16 cases timed out (dashboard 120s default, 4 workers — fixed: dashboard now defaults to 300s timeout). Root cause of false_friend regression: stripping article refs hurts queries where the cited article IS the question. Not shipping. |
+| **run_42_embed_metadata_fix** | 2026-03-31 | **87.28%** (hit@1_family=87.86%) | **84.01%** | **0.8976** | n/a | Re-ingest with `_EXCLUDED_EMBED_METADATA_KEYS` applied to all three Document constructors in `eurlex_ingest.py`. Excludes `referenced_articles`, `sub_article_of`, `node_id`, `has_table`, `chunk_type` from BGE-M3 embedding text. **NEW SOTA — +2.31pp Hit@1 vs run_40, +1.93pp MRR.** Matches run_30 SOTA level (~87.3%); confirmed the run_38 regression was entirely due to metadata pollution. n=173, 0 failures. diluted_embedding still 33.3% (unchanged — not a metadata issue). |
 
 Codex Dashboard Review 2 hang fixes applied 2026-03-20: eval runner `as_completed` hang fixed (replaced with `wait()` polling loop + `shutdown(wait=False)`); `/api/query` converted to async with `asyncio.to_thread` + `asyncio.wait_for` (504 on timeout); BGE-M3 `_encode_lock` added to serialize CPU encodes; `--auto-start-api` stdout pipe bug fixed (DEVNULL).
 

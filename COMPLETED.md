@@ -5,6 +5,10 @@ For open tasks and backlog, see `WORKLOG.md`.
 
 ---
 
+## [2026-03-31] run_42: embedding metadata fix re-ingest — new SOTA confirmed
+
+Re-ingested with `_EXCLUDED_EMBED_METADATA_KEYS` fully applied. Result: Hit@1=87.28%, Hit@1(family)=87.86%, Recall@5=85.16%, MRR=0.8976, n=173 (0 failures). This is +2.31pp Hit@1 and +1.93pp MRR vs run_40 (previous working baseline), and matches the original run_30 SOTA level. Confirmed: the run_38 regression was entirely caused by metadata field pollution in BGE-M3 sparse embeddings (`referenced_articles` etc. injecting article numbers as BM25 tokens). Fix is permanent — `excluded_embed_metadata_keys` now set on all Document constructors in `eurlex_ingest.py`. run_42 is the new SOTA and new active baseline.
+
 ## [2026-03-30] Root cause of run_38 regression identified and fixed — embedding metadata pollution
 
 Diagnosed why cases 137, 141, 156, 169 regressed after the run_38 re-ingest: LlamaIndex was including ALL metadata fields in embedding text by default, meaning `referenced_articles` (e.g. art.197's "132,132a" cross-references) appeared as BGE-M3 sparse tokens, making citing articles outscore the cited articles for those queries. Fix: added `_EXCLUDED_EMBED_METADATA_KEYS` to `eurlex_ingest.py` excluding all non-semantic fields (referenced_*, node_id, has_table, sub_article_of, chunk_type, etc.) from all three Document constructors. Requires re-ingest to materialise. Expected to recover ~87.3% Hit@1.

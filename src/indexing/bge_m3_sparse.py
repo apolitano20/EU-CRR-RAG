@@ -1,7 +1,7 @@
 """
 BGE-M3 sparse encoding helpers for Qdrant hybrid search, plus a LlamaIndex
 BaseEmbedding wrapper (BGEm3Embedding) that reuses the same singleton to avoid
-loading a second copy of the 570 MB model in memory. 
+loading a second copy of the 570 MB model in memory.
 
 Thread-safe via double-checked locking. 
 """

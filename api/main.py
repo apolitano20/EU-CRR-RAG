@@ -249,6 +249,17 @@ class FeedbackListResponse(BaseModel):
     total: int
 
 
+class FeedbackDetail(BaseModel):
+    filename: str
+    created_at: str
+    content: str
+
+
+class FeedbackExportResponse(BaseModel):
+    cases: list[FeedbackDetail]
+    total: int
+
+
 # ------------------------------------------------------------------
 # Endpoints
 # ------------------------------------------------------------------
@@ -451,6 +462,43 @@ def list_feedback() -> FeedbackListResponse:
         items.append(FeedbackItem(filename=f.name, created_at=created_at, query=query, feedback=feedback))
 
     return FeedbackListResponse(items=items, total=len(items))
+
+
+@app.get("/api/feedback/export", response_model=FeedbackExportResponse)
+def export_feedback() -> FeedbackExportResponse:
+    from pathlib import Path
+    import datetime
+
+    cases_dir = Path("evals/cases/manual_cases")
+    if not cases_dir.exists():
+        return FeedbackExportResponse(cases=[], total=0)
+
+    cases: list[FeedbackDetail] = []
+    for f in sorted(cases_dir.glob("case_*.md")):
+        stat = f.stat()
+        created_at = datetime.datetime.fromtimestamp(stat.st_mtime, tz=datetime.timezone.utc).isoformat()
+        cases.append(FeedbackDetail(
+            filename=f.name,
+            created_at=created_at,
+            content=f.read_text(encoding="utf-8"),
+        ))
+
+    return FeedbackExportResponse(cases=cases, total=len(cases))
+
+
+@app.get("/api/feedback/{filename}", response_model=FeedbackDetail)
+def get_feedback(filename: str) -> FeedbackDetail:
+    from pathlib import Path
+    import datetime
+
+    cases_dir = Path("evals/cases/manual_cases")
+    f = cases_dir / filename
+    if not f.exists() or not f.name.startswith("case_"):
+        raise HTTPException(status_code=404, detail=f"Feedback file '{filename}' not found")
+
+    stat = f.stat()
+    created_at = datetime.datetime.fromtimestamp(stat.st_mtime, tz=datetime.timezone.utc).isoformat()
+    return FeedbackDetail(filename=f.name, created_at=created_at, content=f.read_text(encoding="utf-8"))
 
 
 @app.post("/api/ingest", response_model=IngestResponse)
